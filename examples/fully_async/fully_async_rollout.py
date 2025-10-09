@@ -5,9 +5,9 @@ import time
 from typing import List
 
 # Import core functions from sglang_rollout directly to avoid code duplication
-from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
-from slime.utils.async_utils import run
-from slime.utils.types import Sample
+from miles.rollout.sglang_rollout import GenerateState, generate_and_rm_group
+from miles.utils.async_utils import run
+from miles.utils.types import Sample
 
 # Global worker manager
 _global_worker = None

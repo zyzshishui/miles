@@ -22,14 +22,14 @@ huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-
 The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to convert it to a bf16 Hugging Face checkpoint:
 
 ```bash
-cd slime/
+cd miles/
 python tools/fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
 ```
 
 Next, we need to convert the bf16 version of DeepSeek-R1 into the torch_dist format. Specifically, execute the following on 4 separate nodes:
 
 ```bash
-cd slime/
+cd miles/
 source scripts/models/deepseek-v3.sh
 PYTHONPATH=/root/Megatron-LM/ torchrun \
    --nproc-per-node 8 \
@@ -54,7 +54,7 @@ Here, `MASTER_ADDR` is the IP of node0, and `NODE_RANK` indicates the node's ind
 On node0, run:
 
 ```bash
-cd slime/
+cd miles/
 bash scripts/run-deepseek-r1.sh
 ```
 
@@ -96,17 +96,17 @@ CKPT_ARGS=(
    #--hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/
    --ref-load $BASE_DIR/DeepSeek-R1_torch_dist/
    # Actor's load directory, if empty, it will read from `ref_load`
-   --load $BASE_DIR/DeepSeek-R1_slime/
-   --save $BASE_DIR/DeepSeek-R1_slime/
+   --load $BASE_DIR/DeepSeek-R1_miles/
+   --save $BASE_DIR/DeepSeek-R1_miles/
    --save-interval 20
 )
 ```
 
-slime will perform online quantization during training based on the quantization configuration in `hf_checkpoint`. For instance, in the current example, we are using the fp8 checkpoint of DeepSeek R1. This means that when updating parameters, we will first perform blockwise quantization on the parameters before passing them to sglang.
+miles will perform online quantization during training based on the quantization configuration in `hf_checkpoint`. For instance, in the current example, we are using the fp8 checkpoint of DeepSeek R1. This means that when updating parameters, we will first perform blockwise quantization on the parameters before passing them to sglang.
 
 #### PERF\_ARGS
 
-A set of Megatron parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by slime.
+A set of Megatron parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by miles.
 
 For the Megatron part, we have configured TP8, PP4, CP4, and EP32. Since DeepSeek-R1 has 61 layers, which is not divisible by 4, we have specifically configured the last pipeline stage to have 13 layers.
 
@@ -114,7 +114,7 @@ For the Megatron part, we have configured TP8, PP4, CP4, and EP32. Since DeepSee
 
 When `dynamic_batch_size` is enabled, the traditional `micro_batch_size` is ignored.
 
-⚠️ slime always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
+⚠️ miles always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
 
 ```bash
 PERF_ARGS=(
@@ -137,7 +137,7 @@ PERF_ARGS=(
 
 #### GRPO\_ARGS
 
-Currently, these are some GRPO-related parameters in slime:
+Currently, these are some GRPO-related parameters in miles:
 
 ```bash
 GRPO_ARGS=(
@@ -169,9 +169,9 @@ OPTIMIZER_ARGS=(
 
 #### SGLANG\_ARGS
 
-These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to slime by adding a `--sglang-` prefix. To fully leverage sglang's large EP inference capabilities, we have added configurations like ep64, dp\_attention dp8, and deepep mode auto.
+These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to miles by adding a `--sglang-` prefix. To fully leverage sglang's large EP inference capabilities, we have added configurations like ep64, dp\_attention dp8, and deepep mode auto.
 
-The final `--sglang-server-concurrency` is a parameter specific to slime. It is used to prevent the sglang server's concurrent requests from becoming too large and crashing the HTTP server. The default is 512. However, since we now have one server for 8 nodes, we have adjusted it to 1024 to ensure that each dp rank can have a concurrency of 128.
+The final `--sglang-server-concurrency` is a parameter specific to miles. It is used to prevent the sglang server's concurrent requests from becoming too large and crashing the HTTP server. The default is 512. However, since we now have one server for 8 nodes, we have adjusted it to 1024 to ensure that each dp rank can have a concurrency of 128.
 
 ```bash
 SGLANG_ARGS=(

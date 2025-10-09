@@ -20,7 +20,7 @@ The retool example provides:
 
 1. Setup and download datasets:
 ```bash
-cd slime
+cd miles
 pip install -e .
 # For SFT part, you can use later model to RL directly and skip SFT. 
 hf download --repo-type dataset JoeYing/ReTool-SFT  --local-dir /root/JoeYing/ReTool-SFT

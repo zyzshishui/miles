@@ -45,7 +45,7 @@ ROLLOUT_ARGS=(
    --rollout-temperature 0.8
 
    --over-sampling-batch-size 256
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+   --dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 
    --num-steps-per-rollout 4
    --balance-data
@@ -104,7 +104,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    # --use-wandb
-   # --wandb-project slime-dev
+   # --wandb-project miles-dev
    # --wandb-group qwen3-235B-sft
 )
 
@@ -185,7 +185,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-nodes 8 \
    --actor-num-gpus-per-node 8 \
    --colocate \
-   --save-debug-rollout-data /mnt/zhuzilin/github-slime/data.pt \
+   --save-debug-rollout-data /mnt/zhuzilin/github-miles/data.pt \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

@@ -1,14 +1,14 @@
 # Search-R1 lite
 
-This is a minimal reproduction of [Search-R1](https://github.com/PeterGriffinJin/Search-R1) and an example of using multi-turn conversation and tool-calling in slime.
+This is a minimal reproduction of [Search-R1](https://github.com/PeterGriffinJin/Search-R1) and an example of using multi-turn conversation and tool-calling in miles.
 
 ## Environment Setup
 
-Use the `slimerl/slime:latest` image and initialize the environment required for Search-R1:
+Use the `lmsysorg/miles:latest` image and initialize the environment required for Search-R1:
 
 ```bash
 cd /root/
-git clone https://github.com/THUDM/slime.git
+git clone https://github.com/lm-sys/miles.git
 pip install -e .
 # for Search R1
 pip install chardet
@@ -29,7 +29,7 @@ Initialize the Qwen2.5-3B model:
 huggingface-cli download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
 
 # mcore checkpoint
-cd /root/slime
+cd /root/miles
 source scripts/models/qwen2.5-3B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
@@ -57,13 +57,13 @@ SEARCH_R1_CONFIGS = {
 And run:
 
 ```bash
-cd slime/
+cd miles/
 bash examples/search-r1/run_qwen2.5_3B.sh
 ```
 
 ## Code Structure
 
-To implement multi-turn conversation + tool-calling in slime, you only need to implement a custom data generation function and a reward model for the task. These correspond to the following 2 configuration items in the startup script:
+To implement multi-turn conversation + tool-calling in miles, you only need to implement a custom data generation function and a reward model for the task. These correspond to the following 2 configuration items in the startup script:
 
 ```bash
 CUSTOM_ARGS=(

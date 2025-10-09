@@ -5,7 +5,7 @@
 
 First, we need to create a mirror environment and convert the `Qwen3-4B-Base` model by following the [Example: Qwen3-4B Model](./models/qwen3-4B.md).
 
-After that, we will process the SFT data. Here, we use the classic [OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) as an example. First, we process the data into a format suitable for `slime` to load. You can use the following script to add a column that conforms to the OpenAI message format and save it to `/root/openhermes2_5.parquet`.
+After that, we will process the SFT data. Here, we use the classic [OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) as an example. First, we process the data into a format suitable for `miles` to load. You can use the following script to add a column that conforms to the OpenAI message format and save it to `/root/openhermes2_5.parquet`.
 
 ```python
 from datasets import load_dataset
@@ -44,7 +44,7 @@ ds.to_parquet("/root/openhermes2_5.parquet")
 Execute the training:
 
 ```bash
-cd /root/slime
+cd /root/miles
 bash script/run-qwen3-4B-base-sft.sh
 ```
 
@@ -58,7 +58,7 @@ You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [
 
     ```bash
     SFT_ARGS=(
-       --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+       --rollout-function-path miles.rollout.sft_rollout.generate_rollout
        --prompt-data /root/openhermes2_5.parquet
        --input-key messages
        --rollout-shuffle
@@ -73,13 +73,13 @@ You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [
     )
     ```
 
-    SFT actually reuses the custom rollout functionality of slime. By using `--rollout-function-path`, the data generation part is switched from the RL rollout that uses `sglang` to the SFT version that reads data from a file, which is `slime.rollout.sft_rollout.generate_rollout`.
+    SFT actually reuses the custom rollout functionality of miles. By using `--rollout-function-path`, the data generation part is switched from the RL rollout that uses `sglang` to the SFT version that reads data from a file, which is `miles.rollout.sft_rollout.generate_rollout`.
 
     For SFT, it is recommended to set `rollout_batch_size` and `global_batch_size` to the same value and not to configure `n_samples_per_prompt`. This is equivalent to training one batch right after reading one batch.
 
-    `slime` also supports different loss types, and we configure the SFT loss using `--loss-type sft_loss`.
+    `miles` also supports different loss types, and we configure the SFT loss using `--loss-type sft_loss`.
 
-    As for `--calculate-per-token-loss`, this is because `slime` defaults to calculating the per-sample mean for GRPO. In general SFT training, the average is taken over all unmasked tokens in a batch, so it is recommended to configure this.
+    As for `--calculate-per-token-loss`, this is because `miles` defaults to calculating the per-sample mean for GRPO. In general SFT training, the average is taken over all unmasked tokens in a batch, so it is recommended to configure this.
 
     Finally, `--disable-compute-advantages-and-returns` indicates that there is no need to pre-calculate log probabilities during the SFT process, and `--debug-train-only` means that `sglang` does not need to be initialized.
 

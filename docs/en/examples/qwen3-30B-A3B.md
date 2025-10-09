@@ -8,7 +8,7 @@ The environment setup, model download, data, and checkpoint conversion are the s
 To convert huggingface checkpoint to torch_dist, please try:
 
 ```bash
-cd slime/
+cd miles/
 pip install -e .
 source scripts/models/qwen3-30B-A3B.sh
 PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
@@ -23,7 +23,7 @@ PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
 Execute the training script:
 
 ```bash
-cd /root/slime
+cd /root/miles
 bash scripts/run-qwen3-30B-A3B.sh
 ```
 

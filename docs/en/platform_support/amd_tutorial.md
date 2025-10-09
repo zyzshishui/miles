@@ -5,21 +5,21 @@
 
 ## Introduction
 
-If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
+If you are running miles on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
 
 
-<!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->
+<!-- First, you need to configure the miles runtime environment according to the [Readme](../../README.md) documentation and cd to the miles project directory. -->
 
 ## Docker
 
-You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags). 
+You can download the prebuilt image from DockerHub: [rlsys/miles](https://hub.docker.com/r/rlsys/miles/tags). 
 ```bash
-docker pull rlsys/slime:latest
+docker pull rlsys/miles:latest
 ```
-Or you can use the [Dockerfile.rocm](https://github.com/THUDM/slime/blob/main/docker/Dockerfile.rocm) to build it on your side.
+Or you can use the [Dockerfile.rocm](https://github.com/lm-sys/miles/blob/main/docker/Dockerfile.rocm) to build it on your side.
 ```bash
 cd docker
-docker build -f Dockerfile.rocm -t rlsys/slime:latest .
+docker build -f Dockerfile.rocm -t rlsys/miles:latest .
 ```
 
 Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this [ROCm base Docker image](https://hub.docker.com/r/rlsys/rocm-6.3.4-patch/tags) to support virtual memory management on MI300X.
@@ -29,7 +29,7 @@ Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/
 
 ### Environment Setup
 
-Based on the [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags) image (pre-installed with SGLang and Megatron-LM):
+Based on the [rlsys/miles](https://hub.docker.com/r/rlsys/miles/tags) image (pre-installed with SGLang and Megatron-LM):
 ```bash
 docker run --rm -it \
   --device /dev/dri \
@@ -42,32 +42,32 @@ docker run --rm -it \
   -v $HOME/.ssh:/root/.ssh \
   -v $HOME:$HOME \
   --shm-size 128G \
-  --name slime_dev \
+  --name miles_dev \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   -w $PWD \
-  rlsys/slime:latest \
+  rlsys/miles:latest \
   /bin/bash
 ```
 
-Then, download and install slime.
+Then, download and install miles.
 ```bash
-git clone https://github.com/THUDM/slime.git
-cd slime
+git clone https://github.com/lm-sys/miles.git
+cd miles
 pip install -e .
 ```
 
 
 ### Checkpoint Format Conversion
 
-Since slime uses Megatron, and Megatron does not support loading Hugging Face checkpoints directly, we need to convert the model to the `torch_dist` format that Megatron supports.
+Since miles uses Megatron, and Megatron does not support loading Hugging Face checkpoints directly, we need to convert the model to the `torch_dist` format that Megatron supports.
 
 #### HF → Megatron torch\_dist ckpt
 
 Use [mbridge](https://github.com/ISEEKYAN/mbridge.git) or [Megatron-LM-amd_version-amd](https://github.com/yushengsu-thu/Megatron-LM-amd_version.git) for conversion:
 
 ```bash
-cd slime/
+cd miles/
 source scripts/models/qwen3-4B.sh
 MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
@@ -78,7 +78,7 @@ PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
 
 Note: You might encounter some issue in the current model convert script on AMD GPUs. You can go [here](https://huggingface.co/zyzshishui0627/models) to dowload the converted models.
 
-⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
+⚠️ If you encounter an issue where miles cannot be found, please run `pip install -e .` in the miles directory.
 
 
 ### Example: Qwen3-4B
@@ -110,8 +110,8 @@ pkill -9 python
 set -euxo pipefail
 
 ### ROCm Support ###
-SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
-export SLIME_DIR=$SLIME_DIR
+MILES_DIR="/home/yushensu/projects/miles" # Need to change to your own path
+export MILES_DIR=$MILES_DIR
 
 MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
 export MODEL_DIR=$MODEL_DIR
@@ -135,8 +135,8 @@ CKPT_ARGS=(
    --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
    #--hf-checkpoint /root/Qwen3-4B-FP8
    --ref-load ${MODEL_DIR}/Qwen3-4B_torch
-   --load ${MODEL_DIR}/Qwen3-4B_slime/
-   --save ${MODEL_DIR}/Qwen3-4B_slime/
+   --load ${MODEL_DIR}/Qwen3-4B_miles/
+   --save ${MODEL_DIR}/Qwen3-4B_miles/
    --save-interval 20
 )
 
@@ -205,7 +205,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    #--use-wandb
-   # --wandb-project slime-dev
+   # --wandb-project miles-dev
    # --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
 )
@@ -249,7 +249,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disab
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "'${SLIME_DIR}'/Megatron-LM/",
+        "PYTHONPATH": "'${MILES_DIR}'/Megatron-LM/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \

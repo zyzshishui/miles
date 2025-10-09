@@ -1,10 +1,10 @@
 import ray
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
-from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
-from slime.utils.arguments import parse_args
-from slime.utils.tensorboard_utils import _TensorboardAdapter
-from slime.utils.wandb_utils import init_wandb_primary
+from miles.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
+from miles.utils.arguments import parse_args
+from miles.utils.tensorboard_utils import _TensorboardAdapter
+from miles.utils.wandb_utils import init_wandb_primary
 
 
 def train(args):

@@ -16,7 +16,7 @@ huggingface-cli download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
 Next, we need to convert the huggingface checkpoint into the torch_dist format with 2 nodes, each with 8 GPUs:
 
 ```bash
-cd slime/
+cd miles/
 source scripts/models/glm4.5-355B-A32B.sh
 PYTHONPATH=/root/Megatron-LM/ torchrun \
    --nproc-per-node 8 \
@@ -35,7 +35,7 @@ Here, `MASTER_ADDR` is the IP of node0, and `NODE_RANK` indicates the node's ind
 On node0, run:
 
 ```bash
-cd slime/
+cd miles/
 bash scripts/run-glm4.5-355B-A32B.sh
 ```
 
@@ -70,7 +70,7 @@ This reads the model's config from [scripts/models/glm4.5-355B-A32B.sh](../../..
 
 #### PERF\_ARGS
 
-A set of Megatron parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by slime.
+A set of Megatron parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by miles.
 
 For the Megatron part, we have configured TP8, PP4, CP2, and EP16.
 
@@ -78,7 +78,7 @@ For the Megatron part, we have configured TP8, PP4, CP2, and EP16.
 
 When `dynamic_batch_size` is enabled, the traditional `micro_batch_size` is ignored.
 
-⚠️ slime always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
+⚠️ miles always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
 
 ```bash
 PERF_ARGS=(
@@ -100,7 +100,7 @@ PERF_ARGS=(
 
 #### GRPO\_ARGS
 
-Currently, these are some GRPO-related parameters in slime:
+Currently, these are some GRPO-related parameters in miles:
 
 ```bash
 GRPO_ARGS=(
@@ -132,7 +132,7 @@ OPTIMIZER_ARGS=(
 
 #### SGLANG\_ARGS
 
-These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to slime by adding a `--sglang-` prefix.
+These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to miles by adding a `--sglang-` prefix.
 
 ```bash
 SGLANG_ARGS=(
@@ -159,7 +159,7 @@ MISC_ARGS=(
 
 ## FP8 Rollout
 
-The open-source FP8 checkpoint of GLM-4.5 is of per-channel quantization, which could not enable deepep in SGLang. We can use the tool scripts within slime to convert an FP8 checkpoint of 128x128 per-block quant:
+The open-source FP8 checkpoint of GLM-4.5 is of per-channel quantization, which could not enable deepep in SGLang. We can use the tool scripts within miles to convert an FP8 checkpoint of 128x128 per-block quant:
 
 ```bash
 python tools/convert_hf_to_fp8.py \

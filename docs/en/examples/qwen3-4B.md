@@ -2,12 +2,12 @@
 
 ## Environment Setup
 
-After pulling the `slimerl/slime:latest` image, initialize the image environment as follows:
+After pulling the `lmsysorg/miles:latest` image, initialize the image environment as follows:
 
 ```bash
 cd /root/
-git clone https://github.com/THUDM/slime.git
-cd slime/
+git clone https://github.com/lm-sys/miles.git
+cd miles/
 pip install -e .
 ```
 
@@ -30,7 +30,7 @@ Convert the Hugging Face checkpoint into a format that Megatron can load:
 
 ```bash
 # mcore checkpoint
-cd /root/slime
+cd /root/miles
 source scripts/models/qwen3-4B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
@@ -43,7 +43,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 Execute the training script:
 
 ```bash
-cd /root/slime
+cd /root/miles
 bash scripts/run-qwen3-4B.sh
 ```
 
@@ -77,8 +77,8 @@ CKPT_ARGS=(
    # Checkpoint for the reference model
    --ref-load /root/Qwen3-4B_torch_dist
    # Load directory for the actor; if empty, it will be loaded from `ref_load`
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --load /root/Qwen3-4B_miles/
+   --save /root/Qwen3-4B_miles/
    --save-interval 20
 )
 ```
@@ -98,7 +98,7 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
 
    # Reward model type.
-   # slime provides many types and --custom-rm-path for custom models
+   # miles provides many types and --custom-rm-path for custom models
    --rm-type deepscaler
 
    # Total number of rollouts to train
@@ -135,13 +135,13 @@ EVAL_ARGS=(
 
 #### PERF\_ARGS
 
-This is a set of Megatron's parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by slime.
+This is a set of Megatron's parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by miles.
 
 `max_tokens_per_gpu` specifies the maximum number of tokens each GPU can process. When `use_dynamic_batch_size` is enabled, it attempts to pack data of varying lengths within a batch as close to `max_tokens_per_gpu` as possible, thus forming a dynamic micro-batch size. If a single data item exceeds `max_tokens_per_gpu`, it forms its own batch without being truncated. When context parallelism (CP) is enabled, it allows the CP GPUs to share a total of `CP * max_tokens_per_gpu` tokens.
 
 When `dynamic_batch_size` is enabled, the traditional `micro_batch_size` is ignored.
 
-⚠️ slime always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
+⚠️ miles always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
 
 ```bash
 PERF_ARGS=(
@@ -193,7 +193,7 @@ OPTIMIZER_ARGS=(
 
 #### SGLANG\_ARGS
 
-These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to slime by adding the `--sglang-` prefix.
+These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to miles by adding the `--sglang-` prefix.
 
 ```bash
 SGLANG_ARGS=(
@@ -202,16 +202,16 @@ SGLANG_ARGS=(
 )
 ```
 
-⚠️ slime uses `sgl-router` to schedule multiple sglang servers. `dp_size` is not supported when DP attention is disabled.
+⚠️ miles uses `sgl-router` to schedule multiple sglang servers. `dp_size` is not supported when DP attention is disabled.
 
 ### Dynamic Sampling
 
-slime supports more complex sampling schemes, such as the dynamic sampling in [DAPO](https://dapo-sia.github.io/). To enable dynamic sampling, you need to configure:
+miles supports more complex sampling schemes, such as the dynamic sampling in [DAPO](https://dapo-sia.github.io/). To enable dynamic sampling, you need to configure:
 
 ```bash
    --over-sampling-batch-size ${OVER_SAMPLING_BS} \
    --dynamic-sampling-filter-path \
-     slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std \
+     miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std \
 ```
 
 Here, `over_sampling_batch_size` needs to be greater than `rollout_batch_size`. For example, you can configure it as:
@@ -222,7 +222,7 @@ Here, `over_sampling_batch_size` needs to be greater than `rollout_batch_size`. 
    --over-sampling-batch-size 64 \
 ```
 
-In this case, the sampling process will directly sample 64 prompts, with 8 samples per prompt. Since slime performs asynchronous sampling internally, we will receive the 8 responses for each prompt sequentially. Upon receiving the responses, the function specified by `dynamic_sampling_filter_path` is used for filtering. If the samples pass the filter, these 8 data points are kept; otherwise, they are discarded. The function in the example checks if the rewards for the samples are not all identical (i.e., not all correct or all incorrect):
+In this case, the sampling process will directly sample 64 prompts, with 8 samples per prompt. Since miles performs asynchronous sampling internally, we will receive the 8 responses for each prompt sequentially. Upon receiving the responses, the function specified by `dynamic_sampling_filter_path` is used for filtering. If the samples pass the filter, these 8 data points are kept; otherwise, they are discarded. The function in the example checks if the rewards for the samples are not all identical (i.e., not all correct or all incorrect):
 
 ```python
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
@@ -252,7 +252,7 @@ This means that each time, the data corresponding to the first `num_samples` pro
 
 ### BF16 Training with FP8 Inference
 
-slime also supports BF16 training with FP8 inference. For the Qwen3-4B model, you just need to download the following model:
+miles also supports BF16 training with FP8 inference. For the Qwen3-4B model, you just need to download the following model:
 
 ```bash
 huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
@@ -313,6 +313,6 @@ In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocate
 
 ### Asynchronous Training
 
-When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing `train.py` to `train_async.py` in the startup script. By doing this, slime will generate data for the next rollout while training on the current one.
+When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing `train.py` to `train_async.py` in the startup script. By doing this, miles will generate data for the next rollout while training on the current one.
 
 The only difference between `train.py` and `train_async.py` lies in the synchronization logic of the training loop. We achieve this by using Ray's asynchronous features (`.remote`, `ray.get`).

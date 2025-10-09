@@ -2,7 +2,7 @@
 
 ## Aligning Precision
 
-During the development of slime, it is often necessary to check if the model's precision is correct. This can be verified in the following ways:
+During the development of miles, it is often necessary to check if the model's precision is correct. This can be verified in the following ways:
 
 1.  **First Training Step**
     1.  Check if the generated `rollout` is coherent. If not, there are two possible reasons:
@@ -27,20 +27,20 @@ During the development of slime, it is often necessary to check if the model's p
 
 ## Separate Debugging for Training and Inference
 
-slime supports debugging the training and inference parts separately, which allows for the following:
+miles supports debugging the training and inference parts separately, which allows for the following:
 
 * When tuning/debugging the inference part, you can start the task with only a few GPUs.
 * When tuning/debugging the training part, you can ensure the model input is fixed, removing the randomness of rollouts.
 
-Specifically, slime currently provides the following parameters for separate debugging:
+Specifically, miles currently provides the following parameters for separate debugging:
 
 1.  `--debug-rollout-only`
 
-    When enabled, slime will not load Megatron and will only initialize SGLang. You can use this method to debug the inference part.
+    When enabled, miles will not load Megatron and will only initialize SGLang. You can use this method to debug the inference part.
 
 2.  `--debug-train-only`
 
-    When enabled, slime will not load SGLang and will only initialize Megatron. You can use this method to debug the training part.
+    When enabled, miles will not load SGLang and will only initialize Megatron. You can use this method to debug the training part.
 
 3.  `--save-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 

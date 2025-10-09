@@ -13,7 +13,7 @@ import torch.distributed.checkpoint as dist_cp
 from transformers import AutoConfig
 from typing_extensions import override
 
-from slime.backends.megatron_utils.update_weight_utils import convert_to_hf, remove_padding
+from miles.backends.megatron_utils.update_weight_utils import convert_to_hf, remove_padding
 
 
 class UnpicklerWrapper(pickle.Unpickler):
@@ -104,7 +104,7 @@ def get_named_params(args, state_dict):
 
 
 def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_size=None):
-    # for slime update_weight compatible
+    # for miles update_weight compatible
     setattr(args, "sglang_enable_ep_moe", False)
 
     print(f"start saving to {output_dir}")

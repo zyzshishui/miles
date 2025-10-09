@@ -2,12 +2,12 @@
 
 ## Environment Setup
 
-After pulling the `slimerl/slime:latest` image, initialize the image environment as follows:
+After pulling the `lmsysorg/miles:latest` image, initialize the image environment as follows:
 
 ```bash
 cd /root/
-git clone https://github.com/THUDM/slime.git
-cd slime/
+git clone https://github.com/lm-sys/miles.git
+cd miles/
 pip install -e .
 ```
 
@@ -30,7 +30,7 @@ Convert the Hugging Face checkpoint to a Megatron-loadable Hugging Face checkpoi
 
 ```bash
 # mcore checkpoint
-cd /root/slime
+cd /root/miles
 source scripts/models/glm4-9B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
@@ -43,7 +43,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 Execute the training:
 
 ```bash
-cd /root/slime
+cd /root/miles
 bash scripts/run-glm4-9B.sh
 ```
 
@@ -77,8 +77,8 @@ CKPT_ARGS=(
    # Checkpoint for the reference model
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
    # Load directory for the actor; if empty, it will be loaded from `ref_load`
-   --load /root/GLM-Z1-9B-0414_slime/
-   --save /root/GLM-Z1-9B-0414_slime/
+   --load /root/GLM-Z1-9B-0414_miles/
+   --save /root/GLM-Z1-9B-0414_miles/
    --save-interval 20
 )
 ```
@@ -98,7 +98,7 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
 
    # Reward model type.
-   # slime provides many types and --custom-rm-path for custom models
+   # miles provides many types and --custom-rm-path for custom models
    --rm-type deepscaler
 
    # Total number of rollouts to train
@@ -135,13 +135,13 @@ EVAL_ARGS=(
 
 #### PERF\_ARGS
 
-A set of Megatron's parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by slime.
+A set of Megatron's parallelism parameters. Only `--use-dynamic-batch-size` and `--max-tokens-per-gpu` are added by miles.
 
 `max_tokens_per_gpu` specifies the maximum number of tokens each GPU can process. When `use_dynamic_batch_size` is enabled, it will try to pack data of varying lengths within a batch up to `max_tokens_per_gpu`, thus forming a dynamic micro-batch size. If a single data item's length exceeds `max_tokens_per_gpu`, it will form its own batch without being truncated. When context parallelism (CP) is enabled, it allows the CP GPUs to share data with a total length of `CP * max_tokens_per_gpu` tokens.
 
 When `dynamic_batch_size` is enabled, the traditional `micro_batch_size` is ignored.
 
-⚠️  slime always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
+⚠️  miles always trains the model using data packing and strictly guarantees per-sample or per-token loss. This means enabling dynamic batch size will not affect the loss calculation. It is recommended to enable it.
 
 ```bash
 PERF_ARGS=(
@@ -193,7 +193,7 @@ OPTIMIZER_ARGS=(
 
 #### SGLANG\_ARGS
 
-Parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to slime by adding the `--sglang-` prefix.
+Parameters required by sglang. Here, `--rollout-num-gpus-per-engine` basically corresponds to sglang's `tp_size`. Other sglang parameters are passed to miles by adding the `--sglang-` prefix.
 
 ```bash
 SGLANG_ARGS=(
@@ -201,7 +201,7 @@ SGLANG_ARGS=(
 )
 ```
 
-⚠️  slime uses `sgl-router` to schedule multiple sglang servers. `dp_size` is not supported when DP attention is disabled.
+⚠️  miles uses `sgl-router` to schedule multiple sglang servers. `dp_size` is not supported when DP attention is disabled.
 
 ### Co-located Training and Inference
 
@@ -235,12 +235,12 @@ In this case, both training and inference will share these 8 GPUs.
 
 ### Dynamic Sampling
 
-slime supports more complex sampling schemes, such as the dynamic sampling in [DAPO](https://dapo-sia.github.io/). To enable dynamic sampling, you need to configure:
+miles supports more complex sampling schemes, such as the dynamic sampling in [DAPO](https://dapo-sia.github.io/). To enable dynamic sampling, you need to configure:
 
 ```bash
    --over-sampling-batch-size ${OVER_SAMPLING_BS} \
    --dynamic-sampling-filter-path \
-     slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std \
+     miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std \
 ```
 
 Here, `over_sampling_batch_size` needs to be greater than `rollout_batch_size`. For example:
@@ -251,7 +251,7 @@ Here, `over_sampling_batch_size` needs to be greater than `rollout_batch_size`. 
    --over-sampling-batch-size 64 \
 ```
 
-The sampling will then directly sample 64 prompts, with 8 samples per prompt. Since slime performs asynchronous sampling internally, we will receive the 8 responses for each prompt sequentially. Upon receiving responses, they will be filtered using the function specified by `dynamic_sampling_filter_path`. If they pass, these 8 data points are kept; otherwise, they are discarded. The function in the example checks if the answers are all correct or all incorrect:
+The sampling will then directly sample 64 prompts, with 8 samples per prompt. Since miles performs asynchronous sampling internally, we will receive the 8 responses for each prompt sequentially. Upon receiving responses, they will be filtered using the function specified by `dynamic_sampling_filter_path`. If they pass, these 8 data points are kept; otherwise, they are discarded. The function in the example checks if the answers are all correct or all incorrect:
 
 ```python
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):

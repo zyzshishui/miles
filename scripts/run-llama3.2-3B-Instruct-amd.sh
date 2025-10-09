@@ -15,8 +15,8 @@ pkill -9 python
 set -euxo pipefail
 
 ### AMD Support ###
-SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
-export SLIME_DIR=$SLIME_DIR
+MILES_DIR="/home/yushensu/projects/miles" # Need to change to your own path
+export MILES_DIR=$MILES_DIR
 
 MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
 export MODEL_DIR=$MODEL_DIR
@@ -46,8 +46,8 @@ source "${SCRIPT_DIR}/models/llama3.2-3B-Instruct-amd.sh"
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_DIR}/Llama-3.2-3B-Instruct
    --ref-load ${MODEL_DIR}/Llama-3.2-3B-Instruct_torch_dist
-   --load ${MODEL_DIR}/Llama-3.2-3B-Instruct_slime/
-   --save ${MODEL_DIR}/Llama-3.2-3B-Instruct_slime/
+   --load ${MODEL_DIR}/Llama-3.2-3B-Instruct_miles/
+   --save ${MODEL_DIR}/Llama-3.2-3B-Instruct_miles/
    --save-interval 20
 )
 
@@ -114,7 +114,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    # --use-wandb
-   # --wandb-project slime-dev
+   # --wandb-project miles-dev
    # --wandb-group llama3.2-3B
    # --wandb-key ${WANDB_API_KEY}
 )

@@ -1,9 +1,9 @@
 # Usage Guide
 
 
-## Introduction to slime Parameters
+## Introduction to miles Parameters
 
-When using slime, parameters are primarily passed for the following purposes:
+When using miles, parameters are primarily passed for the following purposes:
 
 1.  To allocate a portion of the GPUs in the cluster for training and another portion for inference.
 2.  To load Megatron for the training portion.
@@ -38,7 +38,7 @@ Generally, we need to perform three preparatory steps:
   - Configure parallelism and other optimizations.
   - Configure the checkpoint to be loaded.
 
-For details on some of Megatron's customizations and the principles behind how slime incorporates Megatron, please see the "How to Use Megatron" section.
+For details on some of Megatron's customizations and the principles behind how miles incorporates Megatron, please see the "How to Use Megatron" section.
 
 #### Configuring Model Parameters
 
@@ -71,8 +71,8 @@ We provide configurations for common models in [scripts/models](../../scripts/mo
 
 Note:
 
-  - slime will load all parameters of Megatron found in the `PYTHONPATH`, so you can find parameters and their descriptions within the Megatron in your environment.
-  - slime uses data packing (also known as varlen or thd) for training. There is no need to configure `--seq-length` or `--max-positional-embedding`, as these parameters do not affect the maximum context length of the trained model.
+  - miles will load all parameters of Megatron found in the `PYTHONPATH`, so you can find parameters and their descriptions within the Megatron in your environment.
+  - miles uses data packing (also known as varlen or thd) for training. There is no need to configure `--seq-length` or `--max-positional-embedding`, as these parameters do not affect the maximum context length of the trained model.
 
 #### Setting Up Parallelism and Recomputation
 
@@ -117,7 +117,7 @@ In terms of storage structure, a Megatron checkpoint typically looks like this, 
 
 The `latest_checkpointed_iteration.txt` file records the latest training step. When loading a model, you should not directly pass `/ckpt/iter_xxxxxxx`, but rather pass `/ckpt/` and use `--ckpt-step` to select the corresponding training step (if `--ckpt-step` is not used, the step will be read from `latest_checkpointed_iteration.txt`).
 
-When using slime, there are three parameters for loading and saving checkpoints:
+When using miles, there are three parameters for loading and saving checkpoints:
 
   - `--ref-load`: The Megatron checkpoint for the reference model.
   - `--load`: The Megatron checkpoint for the actor. If `--load` is not set, or if the specified directory does not exist or does not contain `latest_checkpointed_iteration.txt`, the actor will be initialized from the `--ref-load` checkpoint.
@@ -135,15 +135,15 @@ Loading SGLang is very simple. You only need:
 
 Note:
 
-  - Before the first training step, slime will synchronize the parameters from Megatron to SGLang. Therefore, the `--hf-checkpoint` does not need to contain the latest training parameters, and you do not need to change the HF checkpoint when resuming training.
+  - Before the first training step, miles will synchronize the parameters from Megatron to SGLang. Therefore, the `--hf-checkpoint` does not need to contain the latest training parameters, and you do not need to change the HF checkpoint when resuming training.
   - By default, SGLang reads the maximum context length from the `config.json` in the Hugging Face checkpoint. You can use the `--sglang-context-length` parameter to override this value to support longer inference.
   - During co-located training and inference, although Megatron and SGLang will offload sequentially, they still need to leave some memory for each other. You need to adjust SGLang's total VRAM usage by reducing `--sglang-mem-fraction-static`.
 
-For details on some of SGLang's customizations and the principles behind how slime incorporates SGLang, please see the "How to Use SGLang" section.
+For details on some of SGLang's customizations and the principles behind how miles incorporates SGLang, please see the "How to Use SGLang" section.
 
 ### Data Format
 
-Currently, slime only supports loading files in `.jsonl` format, where each line of the file is a JSON object. An example of a single data entry (expanded) is as follows:
+Currently, miles only supports loading files in `.jsonl` format, where each line of the file is a JSON object. An example of a single data entry (expanded) is as follows:
 
 ```json
 {
@@ -166,8 +166,8 @@ This corresponds to the following configuration:
   --apply-chat-template
 ```
 
-Please note that the `step_loss_mask` (default=1) here is for SFT phase. If it is set to 0, the turn will not contibute to the final loss; if it is set to 1, slime will use the normal `loss_mask`.
-Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.
+Please note that the `step_loss_mask` (default=1) here is for SFT phase. If it is set to 0, the turn will not contibute to the final loss; if it is set to 1, miles will use the normal `loss_mask`.
+Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When read, miles will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.
 
 ### Hyperparameters for RL Training
 
@@ -176,14 +176,14 @@ Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When 
     - `gspo` ([https://arxiv.org/abs/2507.18071](https://arxiv.org/abs/2507.18071))
     - `reinforce_plus_plus` and `reinforce_plus_plus_baseline` ([https://arxiv.org/abs/2501.03262](https://arxiv.org/abs/2501.03262))
     - `ppo` ([https://arxiv.org/abs/1707.06347](https://arxiv.org/abs/1707.06347))
-- `--calculate-per-token-loss`: By default, Slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
+- `--calculate-per-token-loss`: By default, Miles calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
 - `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
 
 ## Custom Rollout Function
 
-slime supports customizing data generation (rollout) to various degrees.
+miles supports customizing data generation (rollout) to various degrees.
 
-  - By default, it uses the `generate_rollout` function from [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_rollout.py) for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.
+  - By default, it uses the `generate_rollout` function from [miles/rollout/sglang\_example.py](../../miles/rollout/sglang_rollout.py) for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.
 
   - You can completely replace the `generate_rollout` in sglang\_example.py by using the `--rollout-function-path` parameter. You just need to ensure that the function signature passed via `--rollout-function-path` is as follows:
 
@@ -205,15 +205,15 @@ slime supports customizing data generation (rollout) to various degrees.
 
     Where:
 
-      - `args`: The complete arguments used for the slime run.
+      - `args`: The complete arguments used for the miles run.
 
       - `rollout_id`: The ID of the current data generation round, used to ensure data order when resuming training.
 
-      - `data_buffer`: A globally unique data buffer in slime, which can be used to get initial prompts, data IDs, and store partially generated samples for later use.
+      - `data_buffer`: A globally unique data buffer in miles, which can be used to get initial prompts, data IDs, and store partially generated samples for later use.
 
       - `evaluation`: A boolean indicating if the rollout is for evaluation. You can configure a separate evaluation function using `--eval-function-path`.
 
-      - The returned `Sample` type is defined in [slime/utils/types.py](../../slime/utils/types.py). When implementing, you need to ensure the following fields are correctly set:
+      - The returned `Sample` type is defined in [miles/utils/types.py](../../miles/utils/types.py). When implementing, you need to ensure the following fields are correctly set:
 
           - `tokens`: The tokens for the prompt + response.
           - `response_length`: The total length of the response. For multi-turn tasks, this is the length of the tokens remaining after the first-turn prompt.
@@ -254,44 +254,44 @@ slime supports customizing data generation (rollout) to various degrees.
         return sample
     ```
 
-    For a more complete version, please refer to [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_rollout.py).
+    For a more complete version, please refer to [miles/rollout/sglang\_example.py](../../miles/rollout/sglang_rollout.py).
 
   - Sometimes, you may also need to support a custom reward model. This can be configured by setting `--custom-rm-path`.
 
 ## How to Use SGLang
 
-slime implements a server-based engine using SGLang via the `HttpServerEngineAdapter` as an intermediary.
+miles implements a server-based engine using SGLang via the `HttpServerEngineAdapter` as an intermediary.
 
 ### Parameter Configuration
 
-slime incorporates almost all SGLang parameters by using SGLang's `ServerArgs.add_cli_args`. When setting an SGLang parameter, you need to add the `--sglang-` prefix. For example:
+miles incorporates almost all SGLang parameters by using SGLang's `ServerArgs.add_cli_args`. When setting an SGLang parameter, you need to add the `--sglang-` prefix. For example:
 
   - In co-located training and inference, you often need to limit `--mem-fraction-static`. This parameter should be changed to `--sglang-mem-fraction-static`.
-  - During training, if you want SGLang to infer beyond the maximum context length specified in the Hugging Face checkpoint's `config.json`, you need to use `--context-length`, which becomes `--sglang-context-length` in slime.
+  - During training, if you want SGLang to infer beyond the maximum context length specified in the Hugging Face checkpoint's `config.json`, you need to use `--context-length`, which becomes `--sglang-context-length` in miles.
   - For multi-node large EP inference, you might need `--enable-ep-moe`, `--enable-dp-attention`, `--dp-size`, `--enable-deepep-moe`, etc. These can be passed as `--sglang-enable-ep-moe`, `--sglang-enable-dp-attention`, `--sglang-dp-size`, and `--sglang-enable-deepep-moe` respectively.
 
-Some parameters related to slime's resource scheduling are configured by slime itself, for example:
+Some parameters related to miles's resource scheduling are configured by miles itself, for example:
 
-  - `--tp-size` in slime is set using `--rollout-num-gpus-per-engine`.
-  - `--model-path` in slime is set using `--hf-checkpoint`.
+  - `--tp-size` in miles is set using `--rollout-num-gpus-per-engine`.
+  - `--model-path` in miles is set using `--hf-checkpoint`.
 
-The way SGLang parameters are integrated into slime can be found in [slime/backends/sglang\_utils/arguments.py](../../slime/backends/sglang_utils/arguments.py).
+The way SGLang parameters are integrated into miles can be found in [miles/backends/sglang\_utils/arguments.py](../../miles/backends/sglang_utils/arguments.py).
 
 ### How to Use the Router
 
-slime uses [sglang-router](https://github.com/sgl-project/sglang/tree/main/sgl-router) to manage the SGLang servers during the training process. You can configure the address of the [sglang-router](https://github.com/sgl-project/sglang/tree/main/sgl-router) using `--sglang-router-ip` and `--sglang-router-port`. If not configured, a router will be started by default within the cluster.
+miles uses [sglang-router](https://github.com/sgl-project/sglang/tree/main/sgl-router) to manage the SGLang servers during the training process. You can configure the address of the [sglang-router](https://github.com/sgl-project/sglang/tree/main/sgl-router) using `--sglang-router-ip` and `--sglang-router-port`. If not configured, a router will be started by default within the cluster.
 
 After starting, all SGLang servers will register with the router via the `/add_worker` endpoint. When actually generating data, you only need to send HTTP requests to the router, which will perform load balancing and forward the requests to the servers.
 
-When you configure an external router using `--sglang-router-ip` and `--sglang-router-port`, slime will not start an internal router. Instead, it will register all its servers with this external router. You can then use this external router's address to implement more complex data generation workflows. Note that the router supports OpenAI-compatible APIs.
+When you configure an external router using `--sglang-router-ip` and `--sglang-router-port`, miles will not start an internal router. Instead, it will register all its servers with this external router. You can then use this external router's address to implement more complex data generation workflows. Note that the router supports OpenAI-compatible APIs.
 
 ## How to Use Megatron
 
-slime supports different and lightly modified versions of Megatron by reusing common functions from the `megatron.training` directory, such as `parse_args`, `save_checkpoint`, and `load_checkpoint`. Therefore, when using it, you must ensure that Megatron is accessible in the `PYTHONPATH`, for example, by adding `export PYTHONPATH=/root/Megatron-LM` at runtime.
+miles supports different and lightly modified versions of Megatron by reusing common functions from the `megatron.training` directory, such as `parse_args`, `save_checkpoint`, and `load_checkpoint`. Therefore, when using it, you must ensure that Megatron is accessible in the `PYTHONPATH`, for example, by adding `export PYTHONPATH=/root/Megatron-LM` at runtime.
 
 ### Parameter Configuration
 
-slime directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](../../train.py), for example:
+miles directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](../../train.py), for example:
 
 ```python
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Speculative Decoding
 
-Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.
+Speculative decoding is an important optimization for making faster rollout during RL training. Currently miles only supports speculative decoding without training.
 
 For model with MTP layer (e.g. GLM-4.6, Deepseek-V3/R1), you can run with:
 
@@ -30,7 +30,7 @@ For details on parameter meanings and configuration, see the [SGLang speculative
   2. Specify a broader range for `--sglang-cuda-graph-bs` to avoid batch sizes that trigger CUDA graph padding.
   3. Disable CUDA graph (not recommended due to significant performance loss).
   4. **Notice:** Disabling CUDA graph padding with `--sglang-disable-cuda-graph-padding` is currently ineffective for speculative decoding. See [SGLang `cuda_graph_runner.py`](tbd).
-* For debugging, enable slime’s `--debug-rollout-only` flag to isolate rollout behavior from parameter updates or model offloading.
+* For debugging, enable miles’s `--debug-rollout-only` flag to isolate rollout behavior from parameter updates or model offloading.
 
 ```bash
 # If speculative decoding fails, this can help debug

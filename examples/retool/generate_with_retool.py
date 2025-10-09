@@ -7,13 +7,13 @@ try:
 except ImportError:
     raise ImportError("Jinja2 is required. Please install it with: pip install jinja2")
 
-from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.http_utils import post
-from slime.utils.types import Sample
+from miles.rollout.sglang_rollout import GenerateState
+from miles.utils.http_utils import post
+from miles.utils.types import Sample
 
 # Import reward models
 try:
-    from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
+    from miles.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
 except ImportError:
     raise ImportError("MathDapo is not installed")
 

@@ -19,8 +19,8 @@ set -euxo pipefail
 
 
 ### AMD Support ###
-SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
-export SLIME_DIR=$SLIME_DIR
+MILES_DIR="/home/yushensu/projects/miles" # Need to change to your own path
+export MILES_DIR=$MILES_DIR
 
 MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
 export MODEL_DIR=$MODEL_DIR
@@ -47,8 +47,8 @@ CKPT_ARGS=(
    #--hf-checkpoint /root/Qwen3-4B-FP8
    --ref-load ${MODEL_DIR}/Qwen3-8B_torch_dist
    # --ref-load ${MODEL_DIR}/Qwen3-8B_torch_dist_amd_new
-   --load ${MODEL_DIR}/Qwen3-8B_slime/
-   --save ${MODEL_DIR}/Qwen3-8B_slime/
+   --load ${MODEL_DIR}/Qwen3-8B_miles/
+   --save ${MODEL_DIR}/Qwen3-8B_miles/
    --save-interval 20
 )
 
@@ -115,7 +115,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    #--use-wandb
-   # --wandb-project slime-dev
+   # --wandb-project miles-dev
    # --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
 )

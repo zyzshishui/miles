@@ -39,9 +39,9 @@
 
     You can use `--num-steps-per-rollout` to determine how many steps to run per rollout. This is equivalent to setting the `global_batch_size` to `rollout_batch_size * n_samples_per_prompt // num_steps_per_rollout`.
 
-7.  **Does slime perform data packing / variable-length (varlen) processing?**
+7.  **Does miles perform data packing / variable-length (varlen) processing?**
 
-    Yes. Data packing refers to the process of concatenating samples of varying lengths during training to improve GPU utilization. slime performs this operation by default.
+    Yes. Data packing refers to the process of concatenating samples of varying lengths during training to improve GPU utilization. miles performs this operation by default.
 
 8.  **What should I do if the sglang component shows a `Max retries exceeded with url: /get_model_info (Caused by NewConnectionError)` error?**
 

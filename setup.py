@@ -30,10 +30,10 @@ class bdist_wheel(_bdist_wheel):
 
 # Setup configuration
 setup(
-    author="slime Team",
-    name="slime",
+    author="miles Team",
+    name="miles",
     version="0.1.0",
-    packages=find_packages(include=["slime*", "slime_plugins*"]),
+    packages=find_packages(include=["miles*", "miles_plugins*"]),
     include_package_data=True,
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={

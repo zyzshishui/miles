@@ -29,13 +29,13 @@ source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-4B-Base/
    --ref-load /root/Qwen3-4B-Base_torch_dist
-   --load /root/Qwen3-4B-Base_slime/
-   --save /root/Qwen3-4B-Base_slime/
+   --load /root/Qwen3-4B-Base_miles/
+   --save /root/Qwen3-4B-Base_miles/
    --save-interval 1000
 )
 
 SFT_ARGS=(
-   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+   --rollout-function-path miles.rollout.sft_rollout.generate_rollout
    --prompt-data /root/openhermes2_5.parquet
    --input-key messages
    --rollout-shuffle
@@ -80,7 +80,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    # --use-wandb
-   # --wandb-project slime-dev
+   # --wandb-project miles-dev
    # --wandb-group qwen3-4B-base-sft
    # --wandb-key ${WANDB_KEY}
 )

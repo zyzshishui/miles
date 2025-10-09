@@ -1,6 +1,6 @@
 # Reproducibility
 
-Reproducibility is a bedrock of scientific progress. By combining the [deterministic inference](https://lmsys.org/blog/2025-09-22-sglang-deterministic/) of SGLang and the deterministic mode of Megatron-LM, slime supports bitwise experiment reproduction.
+Reproducibility is a bedrock of scientific progress. By combining the [deterministic inference](https://lmsys.org/blog/2025-09-22-sglang-deterministic/) of SGLang and the deterministic mode of Megatron-LM, miles supports bitwise experiment reproduction.
 
 To enable deterministic training, you need to set:
 ```bash
@@ -23,7 +23,7 @@ And set the following environment variables:
      }
 ```
 
-We also need to set `--use-slime-router` until the pypi whl of sglang-router updates.
+We also need to set `--use-miles-router` until the pypi whl of sglang-router updates.
 
 Here we provide the script to do RL training on Qwen2.5 0.5B model and GSM8K dataset with full deterministic.
 
@@ -35,7 +35,7 @@ huggingface-cli download --repo-type dataset zhuzilin/gsm8k --local-dir /root/gs
 huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/Qwen2.5-0.5B-Instruct
 
 # convert ckpt
-cd slime/
+cd miles/
 source scripts/models/qwen2.5-0.5B.sh
 PYTHONPATH=/root/Megatron-LM/ python \
    tools/convert_hf_to_torch_dist.py \
@@ -50,4 +50,4 @@ And to run training,
 bash examples/reproducibility/run-qwen2.5-0.5B-gsm8k.sh
 ```
 
-For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/slime/pull/370).
+For screen shots of the wandb, please refer to [pull#370](https://github.com/lm-sys/miles/pull/370).

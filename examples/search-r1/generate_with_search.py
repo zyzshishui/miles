@@ -5,9 +5,9 @@ import re
 from google_search_server import google_search
 from qa_em_format import compute_score_em
 
-from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.http_utils import post
-from slime.utils.types import Sample
+from miles.rollout.sglang_rollout import GenerateState
+from miles.utils.http_utils import post
+from miles.utils.types import Sample
 
 SEARCH_R1_CONFIGS = {
     "max_turns": 3,

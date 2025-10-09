@@ -8,9 +8,9 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 __version__ = "0.0.1"
 
-project = "slime"
-copyright = f"2025-{datetime.now().year}, slime"
-author = "slime Team"
+project = "miles"
+copyright = f"2025-{datetime.now().year}, miles"
+author = "miles Team"
 
 version = __version__
 release = __version__
@@ -92,7 +92,7 @@ source_suffix = {
 
 master_doc = "index"
 
-language = os.environ.get("SLIME_DOC_LANG", "en")
+language = os.environ.get("MILES_DOC_LANG", "en")
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
@@ -106,7 +106,7 @@ html_copy_source = True
 html_last_updated_fmt = ""
 
 html_theme_options = {
-    "repository_url": "https://github.com/THUDM/slime",
+    "repository_url": "https://github.com/lm-sys/miles",
     "repository_branch": "main",
     "show_navbar_depth": 3,
     "max_navbar_depth": 4,
@@ -202,23 +202,23 @@ myst_enable_extensions = [
 ]
 myst_heading_anchors = 5
 
-htmlhelp_basename = "slimedoc"
+htmlhelp_basename = "milesdoc"
 
 latex_elements = {}
 
 latex_documents = [
-    (master_doc, "slime.tex", "slime Documentation", "slime Team", "manual"),
+    (master_doc, "miles.tex", "miles Documentation", "miles Team", "manual"),
 ]
 
-man_pages = [(master_doc, "slime", "slime Documentation", [author], 1)]
+man_pages = [(master_doc, "miles", "miles Documentation", [author], 1)]
 
 texinfo_documents = [
     (
         master_doc,
-        "slime",
-        "slime Documentation",
+        "miles",
+        "miles Documentation",
         author,
-        "slime",
+        "miles",
         "One line description of project.",
         "Miscellaneous",
     ),

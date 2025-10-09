@@ -41,7 +41,7 @@ ROLLOUT_ARGS=(
    --rollout-temperature 0.8
 
    --over-sampling-batch-size 64
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+   --dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 
    --global-batch-size 256
 )
@@ -88,7 +88,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-test
+   --wandb-project miles-test
    --wandb-group test-qwen2.5-0.5B-gsm8k
 )
 

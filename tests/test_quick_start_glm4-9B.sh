@@ -92,7 +92,7 @@ OPTIMIZER_ARGS=(
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
 
-   --use-slime-router
+   --use-miles-router
 )
 
 MISC_ARGS=(

@@ -1,4 +1,4 @@
-# slime Documentation
+# miles Documentation
 
 We recommend new contributors start from writing documentation, which helps you quickly understand SGLang codebase.
 Most documentation files are located under the `docs/` folder.

@@ -6,8 +6,8 @@ set -ex
 yes '' | "${SHELL}" <(curl -L micro.mamba.pm/install.sh)
 source ~/.bashrc
 
-micromamba create -n slime python=3.12 pip -c conda-forge -y
-micromamba activate slime
+micromamba create -n miles python=3.12 pip -c conda-forge -y
+micromamba activate miles
 export CUDA_HOME="$CONDA_PREFIX"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
@@ -20,8 +20,8 @@ git checkout 8ecf6b9d2480c3f600826c7d8fef6a16ed603c3f
 pip install -e "python[all]"
 
 # install cuda 12.8 as it's the default cuda version for torch
-micromamba install -n slime cuda cuda-nvtx cuda-nvtx-dev -c nvidia/label/cuda-12.8.0 -y
-micromamba install -n slime -c conda-forge cudnn -y
+micromamba install -n miles cuda cuda-nvtx cuda-nvtx-dev -c nvidia/label/cuda-12.8.0 -y
+micromamba install -n miles -c conda-forge cudnn -y
 pip install cmake ninja
 
 # reinstall sglang deps
@@ -53,23 +53,23 @@ pip install -e .
 # mbridge
 pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 
-# install slime and apply patches
+# install miles and apply patches
 
-# if slime does not exist locally, clone it
-if [ ! -d "$BASE_DIR/slime" ]; then
+# if miles does not exist locally, clone it
+if [ ! -d "$BASE_DIR/miles" ]; then
   cd $BASE_DIR
-  git clone  https://github.com/THUDM/slime.git
-  cd slime/
-  export SLIME_DIR=$BASE_DIR/slime
+  git clone  https://github.com/lm-sys/miles.git
+  cd miles/
+  export MILES_DIR=$BASE_DIR/miles
   pip install -e .
 else
-  export SLIME_DIR=$BASE_DIR/
+  export MILES_DIR=$BASE_DIR/
   pip install -e .
 fi
 
 
 # apply patch
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/v0.5.0rc0-cu126/sglang.patch
+git apply $MILES_DIR/docker/patch/v0.5.0rc0-cu126/sglang.patch
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/v0.5.0rc0-cu126/megatron.patch
+git apply $MILES_DIR/docker/patch/v0.5.0rc0-cu126/megatron.patch

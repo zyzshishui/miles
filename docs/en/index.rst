@@ -1,12 +1,12 @@
-slime Documentation
+miles Documentation
 ====================
 
-slime is an LLM post-training framework for RL scaling, providing two core capabilities:
+miles is an LLM post-training framework for RL scaling, providing two core capabilities:
 
 - High-Performance Training: Supports efficient training in various modes by connecting Megatron with SGLang;
 - Flexible Data Generation: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
-slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.ai, we also supports the following models:
+miles is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.ai, we also supports the following models:
 
 - Qwen3 series (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 series;
 - DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
@@ -71,4 +71,4 @@ slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.a
    :caption: Blogs
 
    blogs/release_v0.1.0.md
-   blogs/introducing_slime.md
+   blogs/introducing_miles.md

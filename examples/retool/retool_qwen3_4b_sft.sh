@@ -24,19 +24,19 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "/root/slime/scripts/models/qwen3-4B.sh"
+source "/root/miles/scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen/Qwen3-4B-Instruct-2507/
    --ref-load /root/Qwen/Qwen3-4B-Instruct-2507_torch_dist
-#    --load ./models/Qwen/Qwen3-4B-Instruct_slime/
-   --save /root/Qwen/Qwen3-4B-Instruct-2507_sft_slime/
+#    --load ./models/Qwen/Qwen3-4B-Instruct_miles/
+   --save /root/Qwen/Qwen3-4B-Instruct-2507_sft_miles/
    --save-interval 1000
    --rotary-base 5000000
 )
 
 SFT_ARGS=(
-   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+   --rollout-function-path miles.rollout.sft_rollout.generate_rollout
    --prompt-data ./data/retool/ReTool-SFT.parquet
    --input-key messages
    --rollout-shuffle
@@ -81,7 +81,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-dev
+   --wandb-project miles-dev
    --wandb-group qwen3-4B-base-sft
    --wandb-key ${WANDB_KEY}
 )
