@@ -22,6 +22,7 @@ else:
 import wandb
 
 from miles.ray.train_actor import TrainRayActor
+from miles.utils import profile_utils
 from miles.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.ppo_utils import compute_approx_kl, compute_policy_loss
@@ -59,6 +60,12 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.args = args
         torch.manual_seed(args.seed)
+
+        if args.record_memory_history:
+            profile_utils.attach_oom_dump_memory_history(
+                memory_snapshot_dir=args.memory_snapshot_dir,
+                memory_snapshot_path=args.memory_snapshot_path,
+            )
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
