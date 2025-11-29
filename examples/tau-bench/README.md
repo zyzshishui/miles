@@ -3,7 +3,7 @@ This example shows miles training in an agentic multi-turn tool use environment.
 
 
 ## Environment Setup 
-Use the `zhuzilin/miles:latest` image and initialize the environment required for Search-R1:
+Use the `zhuzilin/miles:latest` image and initialize the environment required for Tau-Bench:
 
 ```bash
 cd /root/
