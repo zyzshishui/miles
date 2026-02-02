@@ -9,6 +9,39 @@ from miles.utils.memory_utils import print_memory
 
 logger = logging.getLogger(__name__)
 
+# 调试开关：设置环境变量 DEBUG_PG_MAP=1 启用详细日志
+_DEBUG_PG_MAP = os.environ.get("DEBUG_PG_MAP", "0") == "1"
+
+
+def _get_pg_map_info():
+    """获取 pg_map 的调试信息"""
+    try:
+        from torch.distributed.distributed_c10d import _world
+        pg_map = _world.pg_map
+        info = f"pg_map size={len(pg_map)}"
+        if _DEBUG_PG_MAP:
+            details = []
+            for pg, value in pg_map.items():
+                try:
+                    name = pg.name() if hasattr(pg, 'name') else str(id(pg))
+                    backend = value[0] if isinstance(value, tuple) and len(value) > 0 else str(value)
+                    details.append(f"{name}({backend})")
+                except Exception:
+                    details.append(f"<id={id(pg)}>")
+            info += f" [{', '.join(details)}]"
+        return info
+    except Exception as e:
+        return f"pg_map error: {e}"
+
+
+def _check_pg_in_map(pg):
+    """检查 PG 是否在 pg_map 中"""
+    try:
+        from torch.distributed.distributed_c10d import _world
+        return pg in _world.pg_map
+    except Exception:
+        return None
+
 old_new_group_dict = {}
 
 
@@ -131,14 +164,36 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def destroy_process_groups():
         pid = os.getpid()
-        for reloadable_group in ReloadableProcessGroup.GROUPS.get(pid, []):
+        groups = ReloadableProcessGroup.GROUPS.get(pid, [])
+        
+        if _DEBUG_PG_MAP:
+            logger.info(f"[DEBUG] destroy_process_groups: starting, {len(groups)} groups to destroy")
+            logger.info(f"[DEBUG] destroy_process_groups: {_get_pg_map_info()}")
+        
+        for idx, reloadable_group in enumerate(groups):
             if reloadable_group.group is None:
+                if _DEBUG_PG_MAP:
+                    logger.info(f"[DEBUG] destroy_process_groups: group[{idx}] already None, skipping")
                 continue
+            
+            inner_pg = reloadable_group.group
+            in_map_before = _check_pg_in_map(inner_pg)
+            
+            if _DEBUG_PG_MAP:
+                logger.info(
+                    f"[DEBUG] destroy_process_groups: group[{idx}] "
+                    f"inner_pg={id(inner_pg)}, in_pg_map={in_map_before}"
+                )
+            
             try:
                 dist.destroy_process_group(reloadable_group.group)
+                if _DEBUG_PG_MAP:
+                    logger.info(f"[DEBUG] destroy_process_groups: group[{idx}] destroy succeeded")
             except ValueError as e:
+                in_map_after = _check_pg_in_map(inner_pg)
                 logger.warning(
-                    f"Process group already invalid/destroyed; skipping cleanup. Exception: {e}",
+                    f"Process group already invalid/destroyed; skipping cleanup. "
+                    f"Exception: {e}, in_pg_map_before={in_map_before}, in_pg_map_after={in_map_after}",
                     exc_info=True,
                 )
                 # On ROCm the PG would be missing from torch._world maps, which prevents 
@@ -146,24 +201,46 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
                 # Call shutdown directly so communicators can still be torn down.
                 try:
                     if hasattr(reloadable_group.group, "shutdown"):
+                        logger.info(f"[DEBUG] destroy_process_groups: calling fallback shutdown() for group[{idx}]")
                         reloadable_group.group.shutdown()
+                        logger.info(f"[DEBUG] destroy_process_groups: fallback shutdown() succeeded for group[{idx}]")
                 except Exception:
                     logger.exception("Fallback shutdown for process group failed; continuing cleanup.")
 
             del reloadable_group.group
             reloadable_group.group = None
+        
+        if _DEBUG_PG_MAP:
+            logger.info(f"[DEBUG] destroy_process_groups: finished, {_get_pg_map_info()}")
 
     @staticmethod
     def reload_process_groups():
         pid = os.getpid()
         reloadable_groups = ReloadableProcessGroup.GROUPS.get(pid, [])
         logger.info(f"Reloading {len(reloadable_groups)} process groups in pid {pid}")
+        
+        if _DEBUG_PG_MAP:
+            logger.info(f"[DEBUG] reload_process_groups: starting, {_get_pg_map_info()}")
+        
         old_new_group = old_new_group_dict.get(pid)
-        for reloadable_group in reloadable_groups:
+        for idx, reloadable_group in enumerate(reloadable_groups):
             if reloadable_group.group is not None:
+                if _DEBUG_PG_MAP:
+                    logger.info(f"[DEBUG] reload_process_groups: group[{idx}] already exists, skipping")
                 continue
+            
+            if _DEBUG_PG_MAP:
+                logger.info(f"[DEBUG] reload_process_groups: creating group[{idx}] with ranks={reloadable_group.group_info['ranks']}")
+            
             group = old_new_group(ranks=reloadable_group.group_info["ranks"], backend="nccl")
             reloadable_group.group = group
+            
+            if _DEBUG_PG_MAP:
+                in_map = _check_pg_in_map(group)
+                logger.info(f"[DEBUG] reload_process_groups: group[{idx}] created, inner_pg={id(group)}, in_pg_map={in_map}")
+        
+        if _DEBUG_PG_MAP:
+            logger.info(f"[DEBUG] reload_process_groups: finished, {_get_pg_map_info()}")
 
     def rank(self) -> int:
         return self.group.rank()
