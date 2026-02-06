@@ -14,19 +14,16 @@ NODES=(
     "mia1-p02-g46"    # Head node (train)
     "mia1-p02-g23"
     "mia1-p02-g05"
-    "mia1-p01-g43"
-    "mia1-p02-g10"    
-    "mia1-p02-g49"
 )
 
 # Docker configuration
-DOCKER_IMAGE="rlsys/miles:MI350-355-latest"
-CONTAINER_NAME="yuzhen_miles"
+DOCKER_IMAGE="zyzshishui0627/miles:rocm7-sglang-0.5.7"
+CONTAINER_NAME="yuzhen_miles_0205"
 WORKSPACE_DIR="/workspace"
 MILES_DIR="/workspace/miles"
 
 # Training script
-TRAIN_SCRIPT="scripts/run-qwen3-coder-480B-A35B-amd.sh"
+TRAIN_SCRIPT="scripts/run-qwen3-32B-amd.sh"
 
 # SSH options
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30"
@@ -173,17 +170,6 @@ stop_cluster() {
     log "Ray cluster stopped."
 }
 
-# ============== Stop Containers ==============
-stop_containers() {
-    log "Stopping Docker containers on all nodes..."
-    
-    for host in "${NODES[@]}"; do
-        log "Stopping container on $host..."
-        ssh_cmd "$host" "docker stop ${CONTAINER_NAME}; docker rm ${CONTAINER_NAME}" 2>/dev/null || true
-    done
-    
-    log "All containers stopped."
-}
 
 # ============== Status ==============
 show_status() {
@@ -246,7 +232,6 @@ case "$1" in
         ;;
     stop)
         stop_cluster
-        stop_containers
         ;;
     status)
         show_status

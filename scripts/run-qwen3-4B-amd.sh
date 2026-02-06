@@ -15,13 +15,13 @@ set -euxo pipefail
 
 
 ### AMD Support ###
-MILES_DIR="${MILES_DIR:-/root}" # Default path if not set in environment
+MILES_DIR="${MILES_DIR:-/workspace}" # Default path if not set in environment
 export MILES_DIR
 
-MODEL_DIR="${MODEL_DIR:-/root}" # Default path if not set in environment
+MODEL_DIR="${MODEL_DIR:-/workspace}" # Default path if not set in environment
 export MODEL_DIR
 
-DATA_DIR="${DATA_DIR:-/root}"  # Default path if not set in environment
+DATA_DIR="${DATA_DIR:-/workspace}"  # Default path if not set in environment
 export DATA_DIR
 
 # For AMD GPU
@@ -52,21 +52,21 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
    --rollout-temperature 1
 
-   --global-batch-size 256
+   --global-batch-size 128
    --balance-data
 )
 
 EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
-   --eval-top-p 1
+   # --eval-interval 20
+   # --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
+   # --n-samples-per-eval-prompt 16
+   # --eval-max-response-len 16384
+   # --eval-top-p 1
 )
 
 PERF_ARGS=(
@@ -106,10 +106,10 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project miles-dev
-   # --wandb-group qwen3-4B-test
-   # --wandb-key ${WANDB_KEY}
+   --use-wandb
+   --wandb-project miles-dev
+   --wandb-group qwen3-4B-test
+   --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
@@ -153,8 +153,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
    --colocate \
-   --no-offload-train \
-   --no-offload-rollout \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

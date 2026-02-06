@@ -1,10 +1,8 @@
 #!/bin/bash
-# Usage:
-#   bash scripts/run-qwen3-4B-amd-3node-2train-1rollout.sh head   
-#   MASTER_ADDR=${MASTER_ADDR} bash scripts/run-qwen3-4B-amd-3node-2train-1rollout.sh worker
-#   nohup bash scripts/run-qwen3-4B-amd-3node-2train-1rollout.sh submit > nohup_3node_2train_1rollout.out
-#
-# Description: 3-node disaggregated training (2 train nodes + 1 rollout node)
+# Usage (3 nodes: 1 train + 2 rollout):
+#   Node 1 (head/train):   bash scripts/run-qwen3-32B-amd-3node-1train-2rollout.sh head
+#   Node 2-3 (rollout):    MASTER_ADDR=<head_ip> bash scripts/run-qwen3-32B-amd-3node-1train-2rollout.sh worker
+#   Node 1 (submit):       nohup bash scripts/run-qwen3-32B-amd-3node-1train-2rollout.sh submit > nohup_disaggregated.out
 
 set -euo pipefail
 
@@ -13,7 +11,7 @@ setup_env() {
     export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"}
     export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"}
     
-    # Auto-detect network interface
+    # Auto-detect network interface (for 10.28.x.x subnet)
     MILES_IFNAME=$(python3 -c "
 import socket, struct, fcntl, os
 for iface in os.listdir('/sys/class/net/'):
@@ -48,7 +46,7 @@ run_head() {
     export MASTER_ADDR=$(hostname -I | awk '{print $1}')
     
     echo "=============================================="
-    echo "Starting Ray Head Node (3-node: 2 train + 1 rollout)"
+    echo "Starting Ray Head Node"
     echo "Head IP: ${MASTER_ADDR}"
     echo "GPUs: ${NUM_GPUS}"
     echo "Network: ${GLOO_SOCKET_IFNAME}"
@@ -61,10 +59,10 @@ run_head() {
         --dashboard-port=8265
     
     echo ""
-    echo "Head started. Run on 2 worker nodes:"
+    echo "Head started. Run on worker nodes (2 rollout nodes):"
     echo "  MASTER_ADDR=${MASTER_ADDR} bash $0 worker"
     echo ""
-    echo "After all 2 workers are ready, submit job:"
+    echo "Then submit job:"
     echo "  bash $0 submit"
 }
 
@@ -118,16 +116,20 @@ run_submit() {
     export MASTER_ADDR=$(hostname -I | awk '{print $1}')
     export PYTHONBUFFERED=16
     
-    MODEL_DIR="${MODEL_DIR:-/root/data}"
-    DATA_DIR="${DATA_DIR:-/root/data}"
+    MODEL_DIR="${MODEL_DIR:-/workspace}"
+    DATA_DIR="${DATA_DIR:-/workspace}"
     
-    source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+    source "${SCRIPT_DIR}/models/qwen3-32B.sh"
+    
+    # Model paths
+    MODEL_NAME="Qwen3-32B"
+    HF_CHECKPOINT="${MODEL_DIR}/${MODEL_NAME}"
     
     CKPT_ARGS=(
-        --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
-        --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
-        --load ${MODEL_DIR}/Qwen3-4B_miles/
-        --save ${MODEL_DIR}/Qwen3-4B_miles/
+        --hf-checkpoint ${HF_CHECKPOINT}
+        --ref-load ${MODEL_DIR}/${MODEL_NAME}_torch_dist
+        --load ${MODEL_DIR}/${MODEL_NAME}_miles/
+        --save ${MODEL_DIR}/${MODEL_NAME}_miles/
         --save-interval 20
     )
     
@@ -139,24 +141,25 @@ run_submit() {
         --rollout-shuffle
         --rm-type deepscaler
         --num-rollout 3000
-        --rollout-batch-size 64
+        --rollout-batch-size 32
         --n-samples-per-prompt 8
         --rollout-max-response-len 8192
         --rollout-temperature 1
-        --global-batch-size 512
+        --global-batch-size 256
         --balance-data
     )
     
     EVAL_ARGS=(
-        --eval-interval 20
-        --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
-        --n-samples-per-eval-prompt 16
-        --eval-max-response-len 16384
-        --eval-top-p 1
+        # --eval-interval 20
+        # --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
+        # --n-samples-per-eval-prompt 16
+        # --eval-max-response-len 16384
+        # --eval-top-p 1
     )
     
+    # 1 train node (8 GPUs), TP=8, PP=1
     PERF_ARGS=(
-        --tensor-model-parallel-size 2
+        --tensor-model-parallel-size 8
         --sequence-parallel
         --pipeline-model-parallel-size 1
         --context-parallel-size 1
@@ -166,7 +169,7 @@ run_submit() {
         --recompute-method uniform
         --recompute-num-layers 1
         --use-dynamic-batch-size
-        --max-tokens-per-gpu 9216
+        --max-tokens-per-gpu 16384
     )
     
     GRPO_ARGS=(
@@ -186,18 +189,24 @@ run_submit() {
         --weight-decay 0.1
         --adam-beta1 0.9
         --adam-beta2 0.98
+        --optimizer-cpu-offload
+        --overlap-cpu-optimizer-d2h-h2d
+        --use-precision-aware-optimizer
     )
     
     WANDB_ARGS=(
         --use-wandb
-        --wandb-project miles-dev
-        --wandb-group qwen3-4B-3node-2train-1rollout
-        --wandb-key ${WANDB_KEY} 
+        --wandb-project qwen3-32B
+        --wandb-group qwen3-32B-3node-1train-2rollout
+        --wandb-key ${WANDB_KEY}
     )
     
+    # 2 rollout nodes (16 GPUs total), TP=8 per engine
     SGLANG_ARGS=(
-        --rollout-num-gpus-per-engine 2
-        --sglang-mem-fraction-static 0.85
+        --rollout-num-gpus-per-engine 8
+        --sglang-mem-fraction-static 0.7
+        --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+        --use-miles-router
     )
     
     MISC_ARGS=(
@@ -207,15 +216,16 @@ run_submit() {
         --attention-softmax-in-fp32
         --attention-backend flash
         --no-gradient-accumulation-fusion  # Required for AMD
+        --no-check-for-nan-in-loss-and-grad
     )
     
     MEGATRON_LM_PATH=$(python3 -c "import megatron; import os; print(os.path.dirname(os.path.dirname(megatron.__file__)))" 2>/dev/null || echo "/app/Megatron-LM")
     
     echo "=============================================="
     echo "Submitting Disaggregated Training Job"
-    echo "Mode: 2 nodes train + 1 node rollout"
-    echo "  - Train: 2 nodes x 8 GPUs = 16 GPUs"
-    echo "  - Rollout: 1 node x 8 GPUs = 8 GPUs"
+    echo "Mode: 1 node train + 2 nodes rollout"
+    echo "Train: 1 x 8 GPUs = 8 GPUs (TP=8)"
+    echo "Rollout: 2 x 8 GPUs = 16 GPUs"
     echo "=============================================="
     
     ray job submit --address="http://127.0.0.1:8265" \
@@ -230,9 +240,9 @@ run_submit() {
           }
         }" \
         -- python3 train.py \
-        --actor-num-nodes 2 \
+        --actor-num-nodes 1 \
         --actor-num-gpus-per-node 8 \
-        --rollout-num-gpus 8 \
+        --rollout-num-gpus 16 \
         ${MODEL_ARGS[@]} \
         ${CKPT_ARGS[@]} \
         ${ROLLOUT_ARGS[@]} \
@@ -245,15 +255,24 @@ run_submit() {
         ${MISC_ARGS[@]}
 }
 
+show_usage() {
+    echo "Usage: bash $0 <command>"
+    echo ""
+    echo "Commands:"
+    echo "  head      - Start Ray head node (on train node)"
+    echo "  worker    - Start Ray worker node (on rollout nodes)"
+    echo "  submit    - Submit training job"
+    echo ""
+    echo "Example workflow:"
+    echo "  1. Start head:      bash $0 head"
+    echo "  2. Start workers:   MASTER_ADDR=<head_ip> bash $0 worker  (on 2 nodes)"
+    echo "  3. Submit job:      bash $0 submit"
+}
+
 # ============== Main ==============
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 {head|worker|submit}"
-    echo ""
-    echo "3-node disaggregated training (2 train + 1 rollout)"
-    echo "  head   - Start ray head node"
-    echo "  worker - Start ray worker node (run on 2 worker nodes)"
-    echo "  submit - Submit training job"
+    show_usage
     exit 1
 fi
 
@@ -269,6 +288,7 @@ case "$1" in
         ;;
     *)
         echo "Error: Unknown command '$1'"
+        show_usage
         exit 1
         ;;
 esac
