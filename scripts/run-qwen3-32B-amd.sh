@@ -1,8 +1,9 @@
 #!/bin/bash
-# Usage (3 nodes: 1 train + 2 rollout):
-#   Node 1 (head/train):   bash scripts/run-qwen3-32B-amd-3node-1train-2rollout.sh head
-#   Node 2-3 (rollout):    MASTER_ADDR=<head_ip> bash scripts/run-qwen3-32B-amd-3node-1train-2rollout.sh worker
-#   Node 1 (submit):       nohup bash scripts/run-qwen3-32B-amd-3node-1train-2rollout.sh submit > nohup_disaggregated.out
+# Usage (3 nodes: 2 train + 1 rollout):
+#   Node 1 (head/train):   bash scripts/run-qwen3-32B-amd.sh head
+#   Node 2 (train):       MASTER_ADDR=<head_ip> bash scripts/run-qwen3-32B-amd.sh worker
+#   Node 3 (rollout):     MASTER_ADDR=<head_ip> bash scripts/run-qwen3-32B-amd.sh worker
+#   Node 1 (submit):      nohup bash scripts/run-qwen3-32B-amd.sh submit > nohup_disaggregated.out
 
 set -euo pipefail
 
@@ -128,9 +129,9 @@ run_submit() {
     CKPT_ARGS=(
         --hf-checkpoint ${HF_CHECKPOINT}
         --ref-load ${MODEL_DIR}/${MODEL_NAME}_torch_dist
-        --load ${MODEL_DIR}/${MODEL_NAME}_miles/
-        --save ${MODEL_DIR}/${MODEL_NAME}_miles/
-        --save-interval 20
+        # --load ${MODEL_DIR}/${MODEL_NAME}_miles/
+        # --save ${MODEL_DIR}/${MODEL_NAME}_miles/
+        # --save-interval 20000
     )
     
     ROLLOUT_ARGS=(
@@ -143,7 +144,7 @@ run_submit() {
         --num-rollout 3000
         --rollout-batch-size 32
         --n-samples-per-prompt 8
-        --rollout-max-response-len 8192
+        --rollout-max-response-len 16384
         --rollout-temperature 1
         --global-batch-size 256
         --balance-data
@@ -197,11 +198,11 @@ run_submit() {
     WANDB_ARGS=(
         --use-wandb
         --wandb-project qwen3-32B
-        --wandb-group qwen3-32B-3node-1train-2rollout
+        --wandb-group qwen3-32B-3node-2train-1rollout
         --wandb-key ${WANDB_KEY}
     )
     
-    # 2 rollout nodes (16 GPUs total), TP=8 per engine
+    # 1 rollout node (8 GPUs), TP=8 per engine
     SGLANG_ARGS=(
         --rollout-num-gpus-per-engine 8
         --sglang-mem-fraction-static 0.7
@@ -223,9 +224,9 @@ run_submit() {
     
     echo "=============================================="
     echo "Submitting Disaggregated Training Job"
-    echo "Mode: 1 node train + 2 nodes rollout"
-    echo "Train: 1 x 8 GPUs = 8 GPUs (TP=8)"
-    echo "Rollout: 2 x 8 GPUs = 16 GPUs"
+    echo "Mode: 2 nodes train + 1 node rollout"
+    echo "Train: 2 x 8 GPUs = 16 GPUs (TP=8, DP=2)"
+    echo "Rollout: 1 x 8 GPUs = 8 GPUs"
     echo "=============================================="
     
     ray job submit --address="http://127.0.0.1:8265" \
@@ -240,9 +241,9 @@ run_submit() {
           }
         }" \
         -- python3 train.py \
-        --actor-num-nodes 1 \
+        --actor-num-nodes 2 \
         --actor-num-gpus-per-node 8 \
-        --rollout-num-gpus 16 \
+        --rollout-num-gpus 8 \
         ${MODEL_ARGS[@]} \
         ${CKPT_ARGS[@]} \
         ${ROLLOUT_ARGS[@]} \
@@ -260,12 +261,12 @@ show_usage() {
     echo ""
     echo "Commands:"
     echo "  head      - Start Ray head node (on train node)"
-    echo "  worker    - Start Ray worker node (on rollout nodes)"
+    echo "  worker    - Start Ray worker node (on train node 2 or rollout node)"
     echo "  submit    - Submit training job"
     echo ""
     echo "Example workflow:"
     echo "  1. Start head:      bash $0 head"
-    echo "  2. Start workers:   MASTER_ADDR=<head_ip> bash $0 worker  (on 2 nodes)"
+    echo "  2. Start workers:   MASTER_ADDR=<head_ip> bash $0 worker  (on node2 and node3)"
     echo "  3. Submit job:      bash $0 submit"
 }
 
