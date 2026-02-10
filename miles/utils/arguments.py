@@ -1143,6 +1143,38 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 choices=["torch", "memray"],
                 default="torch",
             )
+            parser.add_argument(
+                "--profile-activities",
+                type=str,
+                nargs="+",
+                choices=["cpu", "cuda"],
+                default=["cpu", "cuda"],
+                help="Which activities to profile. Default: cpu cuda. Use 'cuda' only to skip CPU ops and reduce dump size.",
+            )
+            parser.add_argument(
+                "--profile-record-shapes",
+                action="store_true",
+                default=False,
+                help="Record tensor shapes in profiler trace (increases dump size).",
+            )
+            parser.add_argument(
+                "--profile-with-stack",
+                action="store_true",
+                default=False,
+                help="Record call stacks in profiler trace (significantly increases dump time and size).",
+            )
+            parser.add_argument(
+                "--profile-memory",
+                action="store_true",
+                default=False,
+                help="Record memory allocations in profiler trace.",
+            )
+            parser.add_argument(
+                "--profile-with-flops",
+                action="store_true",
+                default=False,
+                help="Count FLOPs in profiler trace.",
+            )
             parser.add_argument("--check-weight-update-equal", action="store_true")
             return parser
 

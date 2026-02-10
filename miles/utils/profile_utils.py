@@ -58,7 +58,21 @@ def _profile_simple_loop(iterator, args, name):
 
 
 def _create_torch_profiler(args, name):
+    record_shapes = getattr(args, "profile_record_shapes", False)
+    with_stack = getattr(args, "profile_with_stack", False)
+    profile_memory = getattr(args, "profile_memory", False)
+    with_flops = getattr(args, "profile_with_flops", False)
+
+    # Build activities list from args
+    activity_map = {
+        "cpu": torch.profiler.ProfilerActivity.CPU,
+        "cuda": torch.profiler.ProfilerActivity.CUDA,
+    }
+    activities_cfg = getattr(args, "profile_activities", ["cpu", "cuda"])
+    activities = [activity_map[a] for a in activities_cfg]
+
     return torch.profiler.profile(
+        activities=activities,
         schedule=torch.profiler.schedule(
             # TODO the train_actor and train_log_probs ones may need to have different args to control step
             wait=max(args.profile_step_start - 1, 0),
@@ -71,10 +85,10 @@ def _create_torch_profiler(args, name):
             worker_name=f"{name}_rank_{torch.distributed.get_rank()}",
             use_gzip=True,
         ),
-        record_shapes=True,
-        with_stack=True,
-        profile_memory=True,
-        with_flops=True,
+        record_shapes=record_shapes,
+        with_stack=with_stack,
+        profile_memory=profile_memory,
+        with_flops=with_flops,
     )
 
 

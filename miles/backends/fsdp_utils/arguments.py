@@ -56,6 +56,11 @@ class FSDPArgs:
     profile_step_start: int = 10
     profile_step_end: int = 12
     tensorboard_dir: str | None = None
+    profile_activities: list = dataclasses.field(default_factory=lambda: ["cpu", "cuda"])
+    profile_record_shapes: bool = False
+    profile_with_stack: bool = False
+    profile_memory: bool = False
+    profile_with_flops: bool = False
 
     # YAML bookkeeping
     config: str | None = None

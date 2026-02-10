@@ -23,7 +23,7 @@ WORKSPACE_DIR="/workspace"
 MILES_DIR="/workspace/miles"
 
 # Training script
-TRAIN_SCRIPT="scripts/run-qwen3-32B-amd.sh"
+TRAIN_SCRIPT="scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh"
 
 # SSH options
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30"
@@ -69,6 +69,7 @@ start_containers() {
         else
             log "  Starting container on $host..."
             ssh_cmd "$host" "docker run -itd --network=host --privileged --device=/dev/kfd --device=/dev/dri \
+                --device=/dev/infiniband \
                 --ipc=host --shm-size 16G --group-add video --cap-add=SYS_PTRACE \
                 --security-opt seccomp=unconfined \
                 -v /it-share-2/data/yuzhzhou:/workspace \
@@ -76,6 +77,9 @@ start_containers() {
                 -v /data/yuzhzhou/cache/huggingface:/root/.cache/huggingface \
                 -v /data/yuzhzhou/cache/torch:/root/.cache/torch \
                 -v /data/yuzhzhou/cache/pip:/root/.cache/pip \
+                -v /usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71:/usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71:ro \
+                -v /usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:/usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:ro \
+                -v /etc/libibverbs.d/ionic.driver:/etc/libibverbs.d/ionic.driver:ro \
                 -e HF_HOME=/root/.cache/huggingface \
                 -e TRANSFORMERS_CACHE=/root/.cache/huggingface \
                 -e HF_DATASETS_CACHE=/root/.cache/huggingface/datasets \
@@ -115,11 +119,21 @@ start_ray_cluster() {
     
     # Cleanup and start head
     log "Starting Ray head on $head_node..."
-    docker_exec "$head_node" "cd ${MILES_DIR} && bash ${TRAIN_SCRIPT} head" &
-    local head_pid=$!
+    docker_exec "$head_node" "cd ${MILES_DIR} && bash ${TRAIN_SCRIPT} head"
     
-    # Wait for head to start
-    sleep 10
+    # Verify head node started successfully
+    log "Verifying Ray head is running..."
+    local retries=0
+    while ! docker_exec "$head_node" "ray status" &>/dev/null; do
+        retries=$((retries + 1))
+        if [ $retries -ge 6 ]; then
+            log "ERROR: Ray head failed to start on $head_node after 30s. Aborting."
+            exit 1
+        fi
+        log "  Waiting for head node... (${retries}/6)"
+        sleep 5
+    done
+    log "Ray head is running."
     
     # Start workers
     for ((i=1; i<${#NODES[@]}; i++)); do
@@ -128,7 +142,7 @@ start_ray_cluster() {
         docker_exec "$worker_node" "cd ${MILES_DIR} && MASTER_ADDR=${head_ip} bash ${TRAIN_SCRIPT} worker" &
     done
     
-    log "Waiting for cluster to initialize..."
+    log "Waiting for workers to join..."
     sleep 15
     
     # Check cluster status
@@ -164,7 +178,7 @@ stop_cluster() {
     
     for host in "${NODES[@]}"; do
         log "Stopping Ray on $host..."
-        docker_exec "$host" "pkill -9 sglang; ray stop --force; pkill -9 ray; pkill -9 python" 2>/dev/null || true
+        docker_exec "$host" "pkill -9 sglang; ray stop --force; pkill -9 ray; pkill -9 python; rm -rf /tmp/ray/" 2>/dev/null || true
     done
     
     log "Ray cluster stopped."
