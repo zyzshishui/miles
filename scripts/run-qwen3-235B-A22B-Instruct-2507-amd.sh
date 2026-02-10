@@ -63,56 +63,6 @@ cleanup() {
     pkill -9 ray 2>/dev/null || true
     pkill -9 python 2>/dev/null || true
     sleep 2
-    # Remove stale Ray session data to avoid session name conflict on restart
-    rm -rf /tmp/ray/ 2>/dev/null || true
-}
-
-# ============== Download ==============
-run_download() {
-    echo "=============================================="
-    echo "Downloading ${HF_REPO} to ${HF_CHECKPOINT}"
-    echo "=============================================="
-    mkdir -p "${MODEL_DIR}"
-    if [ -d "${HF_CHECKPOINT}" ] && [ -f "${HF_CHECKPOINT}/config.json" ]; then
-        echo "Skip download: ${HF_CHECKPOINT} already exists with config.json"
-        exit 0
-    fi
-    huggingface-cli download "${HF_REPO}" --local-dir "${HF_CHECKPOINT}" --local-dir-use-symlinks False
-    echo "Download done: ${HF_CHECKPOINT}"
-}
-
-# ============== Convert HF -> torch_dist ==============
-run_convert() {
-    setup_env
-    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-    REPO_ROOT="$(cd "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
-    cd "${REPO_ROOT}"
-
-    if [ -d "${TORCH_DIST_PATH}" ]; then
-        echo "Skip convert: ${TORCH_DIST_PATH} already exists"
-        exit 0
-    fi
-
-    echo "=============================================="
-    echo "Converting ${HF_CHECKPOINT} -> ${TORCH_DIST_PATH}"
-    echo "Using ${NUM_GPUS} GPUs"
-    echo "=============================================="
-    if [ ! -d "${HF_CHECKPOINT}" ] || [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
-        echo "Error: HF checkpoint not found at ${HF_CHECKPOINT}. Run: bash $0 download"
-        exit 1
-    fi
-
-    MEGATRON_LM_PATH=$(python3 -c "import megatron; import os; print(os.path.dirname(os.path.dirname(megatron.__file__)))" 2>/dev/null || echo "/app/Megatron-LM")
-    export PYTHONPATH="${MEGATRON_LM_PATH}:${REPO_ROOT}"
-
-    source "${SCRIPT_DIR}/models/qwen3-235B-A22B.sh"
-    torchrun --nproc-per-node "${NUM_GPUS}" \
-        tools/convert_hf_to_torch_dist.py \
-        "${MODEL_ARGS[@]}" \
-        --hf-checkpoint "${HF_CHECKPOINT}" \
-        --save "${TORCH_DIST_PATH}"
-
-    echo "Convert done: ${TORCH_DIST_PATH}"
 }
 
 # ============== Head Node ==============
@@ -207,11 +157,11 @@ run_submit() {
         --rollout-shuffle
         --rm-type deepscaler
         --num-rollout 3000
-        --rollout-batch-size 8
+        --rollout-batch-size 16
         --n-samples-per-prompt 8
-        --rollout-max-response-len 8192
+        --rollout-max-response-len 16384
         --rollout-temperature 1
-        --global-batch-size 64
+        --global-batch-size 128 
         --balance-data
     )
 
@@ -288,7 +238,7 @@ run_submit() {
     SGLANG_ARGS=(
         --rollout-num-gpus-per-engine 8
         --sglang-mem-fraction-static 0.7
-        --sglang-cuda-graph-bs 1 2 4 8
+        --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
         --use-miles-router
     )
 
@@ -323,6 +273,7 @@ run_submit() {
              \"NCCL_IB_GID_INDEX\": \"${NCCL_IB_GID_INDEX}\",
              \"NCCL_NET_GDR_LEVEL\": \"${NCCL_NET_GDR_LEVEL}\",
              \"NCCL_DEBUG\": \"${NCCL_DEBUG}\",
+             \"TRITON_KERNEL_AUTOTUNING\": \"0\",
              \"MILES_HOST_IP\": \"${MASTER_ADDR}\",
              \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\"
           }
@@ -348,8 +299,6 @@ show_usage() {
     echo "Usage: bash $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  download  - Download Qwen/Qwen3-235B-A22B-Instruct-2507 to \${MODEL_DIR:-/workspace}"
-    echo "  convert   - Convert HF checkpoint to torch_dist (need run on single node with 8 GPUs)"
     echo "  head      - Start Ray head node"
     echo "  worker    - Start Ray worker node"
     echo "  submit    - Submit training job"
@@ -368,12 +317,6 @@ if [ $# -lt 1 ]; then
 fi
 
 case "$1" in
-    download)
-        run_download
-        ;;
-    convert)
-        run_convert
-        ;;
     head)
         run_head
         ;;

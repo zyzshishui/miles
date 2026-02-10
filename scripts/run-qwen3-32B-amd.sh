@@ -27,6 +27,20 @@ for iface in os.listdir('/sys/class/net/'):
     export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-$MILES_IFNAME}
     export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-$MILES_IFNAME}
     export NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
+    
+    # RCCL RDMA/RoCE configuration for cross-node communication
+    export NCCL_IB_HCA=${NCCL_IB_HCA:-rdma0,rdma1,rdma2,rdma3,rdma4,rdma5,rdma6,rdma7}
+    # NOTE: On these nodes, only GID indices 0/1 are populated; 3 is all-zero and will break NET/IB connects.
+    # Prefer an IPv4-mapped RoCEv2 GID when available (typically index 1).
+    if [[ -z "${NCCL_IB_GID_INDEX+x}" ]]; then
+        if [[ -r /sys/class/infiniband/rdma0/ports/1/gids/1 ]] && [[ "$(cat /sys/class/infiniband/rdma0/ports/1/gids/1)" != "0000:0000:0000:0000:0000:0000:0000:0000" ]]; then
+            export NCCL_IB_GID_INDEX=1
+        else
+            export NCCL_IB_GID_INDEX=0
+        fi
+    fi
+    export NCCL_NET_GDR_LEVEL=${NCCL_NET_GDR_LEVEL:-SYS}
+    export NCCL_DEBUG=INFO
 }
 
 cleanup() {
@@ -60,7 +74,7 @@ run_head() {
         --dashboard-port=8265
     
     echo ""
-    echo "Head started. Run on worker nodes (2 rollout nodes):"
+    echo "Head started. Run on worker nodes:"
     echo "  MASTER_ADDR=${MASTER_ADDR} bash $0 worker"
     echo ""
     echo "Then submit job:"
@@ -85,7 +99,6 @@ run_worker() {
     echo "Head IP: ${MASTER_ADDR}"
     echo "Worker IP: ${WORKER_IP}"
     echo "GPUs: ${NUM_GPUS}"
-    echo "Network: ${GLOO_SOCKET_IFNAME}"
     echo "=============================================="
     
     ray start --address=${MASTER_ADDR}:6379 \
@@ -142,11 +155,11 @@ run_submit() {
         --rollout-shuffle
         --rm-type deepscaler
         --num-rollout 3000
-        --rollout-batch-size 32
+        --rollout-batch-size 16
         --n-samples-per-prompt 8
         --rollout-max-response-len 16384
         --rollout-temperature 1
-        --global-batch-size 256
+        --global-batch-size 128
         --balance-data
     )
     
@@ -198,7 +211,7 @@ run_submit() {
     WANDB_ARGS=(
         --use-wandb
         --wandb-project qwen3-32B
-        --wandb-group qwen3-32B-3node-2train-1rollout
+        --wandb-group 2t-1r
         --wandb-key ${WANDB_KEY}
     )
     
@@ -210,13 +223,27 @@ run_submit() {
         --use-miles-router
     )
     
+    PROFILE_ARGS=(
+        --use-pytorch-profiler
+        --profile-target train_overall
+        --profile-step-start 1
+        --profile-step-end 2
+        --tensorboard-dir /workspace/miles/profile_output
+        # Uncomment below to collect more data (increases dump time):
+        # --profile-activities cpu cuda      # include CPU ops (default if not specified)
+        # --profile-record-shapes            # record tensor shapes
+        # --profile-with-stack               # record source file/line (very slow dump)
+        # --profile-memory                   # track memory alloc/dealloc
+        # --profile-with-flops               # estimate FLOPs for matmul/conv
+    )
+    
     MISC_ARGS=(
         --attention-dropout 0.0
         --hidden-dropout 0.0
         --accumulate-allreduce-grads-in-fp32
         --attention-softmax-in-fp32
         --attention-backend flash
-        --no-gradient-accumulation-fusion  # Required for AMD
+        --no-gradient-accumulation-fusion
         --no-check-for-nan-in-loss-and-grad
     )
     
@@ -236,6 +263,11 @@ run_submit() {
              \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
              \"GLOO_SOCKET_IFNAME\": \"${GLOO_SOCKET_IFNAME}\",
              \"NCCL_SOCKET_IFNAME\": \"${NCCL_SOCKET_IFNAME}\",
+             \"NCCL_IB_HCA\": \"${NCCL_IB_HCA}\",
+             \"NCCL_IB_GID_INDEX\": \"${NCCL_IB_GID_INDEX}\",
+             \"NCCL_NET_GDR_LEVEL\": \"${NCCL_NET_GDR_LEVEL}\",
+             \"NCCL_DEBUG\": \"${NCCL_DEBUG}\",
+             \"TRITON_KERNEL_AUTOTUNING\": \"0\",
              \"MILES_HOST_IP\": \"${MASTER_ADDR}\",
              \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\"
           }
@@ -253,7 +285,8 @@ run_submit() {
         ${PERF_ARGS[@]} \
         ${EVAL_ARGS[@]} \
         ${SGLANG_ARGS[@]} \
-        ${MISC_ARGS[@]}
+        ${MISC_ARGS[@]} \
+        ${PROFILE_ARGS[@]}
 }
 
 show_usage() {
@@ -271,7 +304,6 @@ show_usage() {
 }
 
 # ============== Main ==============
-
 if [ $# -lt 1 ]; then
     show_usage
     exit 1
