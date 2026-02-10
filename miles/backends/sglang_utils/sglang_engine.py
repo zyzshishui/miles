@@ -180,6 +180,12 @@ class SGLangEngine(RayActor):
 
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
+        # Disable GPU Direct RDMA for NCCL groups created inside the SGLang
+        # server (i.e. the miles-pp weight-update groups).  GDRDMA hangs
+        # during ncclCommInit when a single training GPU connects to a
+        # multi-GPU engine node.  The engine's internal TP group uses P2P/IPC
+        # (intra-node) so it is unaffected by this setting.
+        os.environ["NCCL_NET_GDR_LEVEL"] = "0"
         self.process = launch_server_process(ServerArgs(**server_args_dict))
 
         if self.node_rank == 0 and self.router_ip and self.router_port:

@@ -1,5 +1,6 @@
 import abc
 import logging
+import os
 import socket
 from argparse import Namespace
 from collections.abc import Sequence
@@ -210,13 +211,25 @@ class UpdateWeightFromDistributed(UpdateWeight):
                 )
                 for i, engine in enumerate(self.rollout_engines)
             ]
-            self._model_update_groups = init_process_group(
-                backend="nccl",
-                init_method=f"tcp://{master_address}:{master_port}",
-                world_size=world_size,
-                rank=0,
-                group_name=self._group_name,
-            )
+            # Disable GPU Direct RDMA for the weight-update NCCL group.
+            # GDRDMA hangs during ncclCommInit when a single training GPU
+            # connects to a multi-GPU rollout engine node.  The training
+            # default_pg (already created) keeps GDRDMA.
+            old_gdr = os.environ.get("NCCL_NET_GDR_LEVEL")
+            os.environ["NCCL_NET_GDR_LEVEL"] = "0"
+            try:
+                self._model_update_groups = init_process_group(
+                    backend="nccl",
+                    init_method=f"tcp://{master_address}:{master_port}",
+                    world_size=world_size,
+                    rank=0,
+                    group_name=self._group_name,
+                )
+            finally:
+                if old_gdr is not None:
+                    os.environ["NCCL_NET_GDR_LEVEL"] = old_gdr
+                else:
+                    os.environ.pop("NCCL_NET_GDR_LEVEL", None)
             ray.get(refs)
 
     def update_bucket_weights(self, named_tensors, weight_version=None) -> None:

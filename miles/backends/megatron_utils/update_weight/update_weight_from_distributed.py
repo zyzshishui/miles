@@ -1,3 +1,5 @@
+import logging
+import os
 import socket
 import time
 from argparse import Namespace
@@ -15,6 +17,8 @@ from miles.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
+
+logger = logging.getLogger(__name__)
 
 
 class UpdateWeightFromDistributed:
@@ -262,14 +266,29 @@ def connect_rollout_engines_from_distributed(
         )
         for i, engine in enumerate(rollout_engines)
     ]
-    model_update_groups = init_process_group(
-        backend="nccl",
-        init_method=f"tcp://{master_address}:{master_port}",
-        world_size=world_size,
-        rank=0,
-        group_name=group_name,
-    )
+    # Disable GPU Direct RDMA for the weight-update NCCL groups.  GDRDMA
+    # hangs during ncclCommInit when a single-GPU training rank connects to
+    # an 8-GPU rollout engine node (confirmed by cross-node test).  Standard
+    # IB RDMA (data staged via CPU) works fine and is fast enough for the
+    # once-per-step weight broadcast.  The training default_pg (already
+    # created with GDRDMA) is unaffected by this change.
+    old_gdr = os.environ.get("NCCL_NET_GDR_LEVEL")
+    os.environ["NCCL_NET_GDR_LEVEL"] = "0"
+    try:
+        model_update_groups = init_process_group(
+            backend="nccl",
+            init_method=f"tcp://{master_address}:{master_port}",
+            world_size=world_size,
+            rank=0,
+            group_name=group_name,
+        )
+    finally:
+        if old_gdr is not None:
+            os.environ["NCCL_NET_GDR_LEVEL"] = old_gdr
+        else:
+            os.environ.pop("NCCL_NET_GDR_LEVEL", None)
     ray.get(refs)
+
     return model_update_groups
 
 
