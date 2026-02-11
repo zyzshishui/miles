@@ -74,9 +74,10 @@ def _create_torch_profiler(args, name):
     return torch.profiler.profile(
         activities=activities,
         schedule=torch.profiler.schedule(
-            # TODO the train_actor and train_log_probs ones may need to have different args to control step
-            wait=max(args.profile_step_start - 1, 0),
-            warmup=1 if args.profile_step_start > 0 else 0,
+            # tmp fix since kineto has a bug of not dropping warmup activities
+            # https://github.com/pytorch/kineto/pull/1255
+            wait=args.profile_step_start,
+            warmup=0,
             active=args.profile_step_end - args.profile_step_start,
             repeat=1,
         ),
