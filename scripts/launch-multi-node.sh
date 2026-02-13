@@ -24,6 +24,7 @@ MILES_DIR="/workspace/miles"
 
 # Training script
 TRAIN_SCRIPT="scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh"
+# TRAIN_SCRIPT="scripts/run-qwen3-32B-amd.sh"
 
 # SSH options
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30"
@@ -104,6 +105,16 @@ install_miles() {
     
     wait
     log "Miles installed on all nodes."
+    
+    log "Installing torch_memory_saver on all nodes..."
+    
+    for host in "${NODES[@]}"; do
+        log "Installing torch_memory_saver on $host..."
+        docker_exec "$host" "cd /workspace/torch_memory_saver && pip install -e . -q" &
+    done
+    
+    wait
+    log "torch_memory_saver installed on all nodes."
 }
 
 # ============== Start Ray Cluster ==============
