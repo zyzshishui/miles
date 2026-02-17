@@ -14,18 +14,18 @@ NODES=(
     "mia1-p02-g46"    # Head node (train)
     "mia1-p02-g23"
     "mia1-p02-g05"
+    "mia1-p02-g45"
 )
 
 # Docker configuration
 DOCKER_IMAGE="zyzshishui0627/miles:rocm7-sglang-0.5.7"
-CONTAINER_NAME="yuzhen_miles_0205"
+CONTAINER_NAME="yuzhen_miles_0216"
 WORKSPACE_DIR="/workspace"
 MILES_DIR="/workspace/miles"
 
 # Training script
 TRAIN_SCRIPT="scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh"
 # TRAIN_SCRIPT="scripts/run-qwen3-32B-amd.sh"
-
 # SSH options
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30"
 
@@ -81,6 +81,8 @@ start_containers() {
                 -v /usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71:/usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71:ro \
                 -v /usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:/usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:ro \
                 -v /etc/libibverbs.d/ionic.driver:/etc/libibverbs.d/ionic.driver:ro \
+                -v /it-share-2/data/yuzhzhou/rccl-net-plugin:/opt/rocm/lib/rccl-net-plugin:ro \
+                -e LD_LIBRARY_PATH=/opt/rocm/lib/rccl-net-plugin:/opt/rocm/lib \
                 -e HF_HOME=/root/.cache/huggingface \
                 -e TRANSFORMERS_CACHE=/root/.cache/huggingface \
                 -e HF_DATASETS_CACHE=/root/.cache/huggingface/datasets \
