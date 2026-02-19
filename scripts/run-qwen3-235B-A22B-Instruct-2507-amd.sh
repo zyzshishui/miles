@@ -1,14 +1,10 @@
 #!/bin/bash
-# Qwen3-235B-A22B-Instruct-2507: 下载、转 torch_dist、训练，模型目录 /workspace
+# Qwen3-235B-A22B-Instruct-2507: disaggregate async 训练，模型目录 /workspace
 #
-# Usage:
-#   1. 下载模型:   bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh download
-#   2. 转 torch_dist: bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh convert
-#   3. 多机训练 (3 节点: 2 train + 1 rollout):
-#      Node 1 (head):  bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh head
-#      Node 2 (train): MASTER_ADDR=<head_ip> bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh worker
-#      Node 3 (rollout): MASTER_ADDR=<head_ip> bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh worker
-#      Node 1 (submit): nohup bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh submit > nohup_235b.out
+# Usage (4 节点: 1 train + 3 rollout, disaggregate async):
+#   Node 1 (head/train):    bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh head
+#   Node 2-4 (rollout):     MASTER_ADDR=<head_ip> bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh worker
+#   Node 1 (submit):        nohup bash scripts/run-qwen3-235B-A22B-Instruct-2507-amd.sh submit > nohup_235b.out
 
 set -euo pipefail
 
@@ -155,13 +151,13 @@ run_submit() {
         --label-key label
         --apply-chat-template
         --rollout-shuffle
-        --rm-type deepscaler
+        --rm-type math
         --num-rollout 3000
-        --rollout-batch-size 16
+        --rollout-batch-size 32
         --n-samples-per-prompt 8
-        --rollout-max-response-len 16384
+        --rollout-max-response-len 8192
         --rollout-temperature 1
-        --global-batch-size 128 
+        --global-batch-size 256 
         --balance-data
     )
 
@@ -173,17 +169,15 @@ run_submit() {
         # --eval-top-p 1
     )
 
-    # 235B-A22B: TP=4, PP=2, EP=8 (2 train nodes x 8 GPUs = 16, DP=2)
-    # PP=2: 每节点1个stage, bubble降低; EP=8: MoE all-to-all全节点内
-    # 通信: TP/DP/EP全在节点内, 仅PP p2p跨节点
+    # 235B-A22B: TP=4, PP=1, EP=8 (1 train node x 8 GPUs = 8, DP=2)
+    # TP最大=4 (受限于num_query_groups=4), 单节点无需PP, EP=8: MoE all-to-all全节点内
     PERF_ARGS=(
         --tensor-model-parallel-size 4
         --sequence-parallel
-        --pipeline-model-parallel-size 2
+        --pipeline-model-parallel-size 1
         --context-parallel-size 1
         --expert-model-parallel-size 8
         --expert-tensor-parallel-size 1
-        --decoder-last-pipeline-num-layers 47
         --recompute-granularity full
         --recompute-method uniform
         --recompute-num-layers 1
@@ -215,28 +209,22 @@ run_submit() {
     WANDB_ARGS=(
         --use-wandb
         --wandb-project qwen3-235B-A22B
-        --wandb-group 2t-1r
+        --wandb-group 1t-3r-async
         --wandb-key ${WANDB_KEY}
     )
 
     PROFILE_ARGS=(
-        --use-pytorch-profiler
-        --profile-target train_overall
-        --profile-step-start 1
-        --profile-step-end 2
-        --tensorboard-dir /workspace/miles/profile_output
-        # Default: cpu + cuda activities, no extra data collection (fast dump).
-        # Uncomment below to collect more data (increases dump time):
-        # --profile-activities cuda          # skip CPU ops to reduce dump size
-        # --profile-record-shapes            # record tensor shapes
-        # --profile-with-stack               # record source file/line (very slow dump)
-        # --profile-memory                   # track memory alloc/dealloc
-        # --profile-with-flops               # estimate FLOPs for matmul/conv
+        # --use-pytorch-profiler
+        # --profile-target train_overall
+        # --profile-step-start 1
+        # --profile-step-end 2
+        # --tensorboard-dir /workspace/miles/profile_output
     )
 
-    # 1 rollout node 8 GPUs
+    # 3 rollout nodes x 8 GPUs = 24, each engine = 1 node (8 GPUs)
     SGLANG_ARGS=(
         --rollout-num-gpus-per-engine 8
+        --sglang-ep-size 8
         --sglang-mem-fraction-static 0.7
         --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
         --use-miles-router
@@ -255,10 +243,10 @@ run_submit() {
     MEGATRON_LM_PATH=$(python3 -c "import megatron; import os; print(os.path.dirname(os.path.dirname(megatron.__file__)))" 2>/dev/null || echo "/app/Megatron-LM")
 
     echo "=============================================="
-    echo "Submitting Qwen3-235B-A22B-Instruct-2507 Training"
-    echo "Mode: 2 nodes train + 1 node rollout"
-    echo "Train: 2 x 8 GPUs = 16 (TP=4, PP=2, EP=8, DP=2)"
-    echo "Rollout: 1 x 8 GPUs"
+    echo "Submitting Qwen3-235B-A22B-Instruct-2507 Disaggregate Async Training"
+    echo "Mode: 1 node train + 3 nodes rollout (async)"
+    echo "Train: 1 x 8 GPUs (TP=4, PP=1, EP=8, DP=2)"
+    echo "Rollout: 3 x 8 GPUs = 24"
     echo "Model: ${HF_CHECKPOINT}, ref: ${TORCH_DIST_PATH}"
     echo "=============================================="
 
@@ -278,10 +266,11 @@ run_submit() {
              \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\"
           }
         }" \
-        -- python3 train.py \
-        --actor-num-nodes 2 \
+        -- python3 train_async.py \
+        --actor-num-nodes 1 \
         --actor-num-gpus-per-node 8 \
-        --rollout-num-gpus 8 \
+        --rollout-num-gpus 24 \
+        --update-weights-interval 2 \
         ${MODEL_ARGS[@]} \
         ${CKPT_ARGS[@]} \
         ${ROLLOUT_ARGS[@]} \
@@ -299,15 +288,14 @@ show_usage() {
     echo "Usage: bash $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  head      - Start Ray head node"
-    echo "  worker    - Start Ray worker node"
-    echo "  submit    - Submit training job"
+    echo "  head      - Start Ray head node (train node)"
+    echo "  worker    - Start Ray worker node (rollout nodes)"
+    echo "  submit    - Submit disaggregate async training job"
     echo ""
-    echo "Example:"
-    echo "  bash $0 download && bash $0 convert"
-    echo "  bash $0 head   # on node1"
-    echo "  MASTER_ADDR=<head_ip> bash $0 worker   # on node2, node3"
-    echo "  bash $0 submit # on node1"
+    echo "Example (4 nodes: 1 train + 3 rollout):"
+    echo "  bash $0 head   # on node1 (train)"
+    echo "  MASTER_ADDR=<head_ip> bash $0 worker   # on node2, node3, node4 (rollout)"
+    echo "  nohup bash $0 submit > nohup_235b.out   # on node1"
 }
 
 # ============== Main ==============
