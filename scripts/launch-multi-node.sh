@@ -19,7 +19,7 @@ NODES=(
 
 # Docker configuration
 DOCKER_IMAGE="zyzshishui0627/miles:rocm7-sglang-0.5.7"
-CONTAINER_NAME="yuzhen_miles_0216"
+CONTAINER_NAME="yuzhen_miles_0223"
 WORKSPACE_DIR="/workspace"
 MILES_DIR="/workspace/miles"
 
@@ -82,7 +82,32 @@ start_containers() {
                 -v /usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:/usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:ro \
                 -v /etc/libibverbs.d/ionic.driver:/etc/libibverbs.d/ionic.driver:ro \
                 -v /it-share-2/data/yuzhzhou/rccl-net-plugin:/opt/rocm/lib/rccl-net-plugin:ro \
+                -v /boot/config-$(uname -r):/boot/config-$(uname -r):ro \
                 -e LD_LIBRARY_PATH=/opt/rocm/lib/rccl-net-plugin:/opt/rocm/lib \
+                -e NCCL_NET_PLUGIN=anp \
+                -e NCCL_SOCKET_IFNAME=eno0 \
+                -e HSA_FORCE_FINE_GRAIN_PCIE=1 \
+                -e HSA_NO_SCRATCH_RECLAIM=1 \
+                -e NCCL_NET_GDR_LEVEL=3 \
+                -e NCCL_NET_OPTIONAL_RECV_COMPLETION=0 \
+                -e NCCL_GDR_FLUSH_DISABLE=1 \
+                -e RCCL_GDR_FLUSH_GPU_MEM_NO_RELAXED_ORDERING=0 \
+                -e NCCL_IB_USE_INLINE=1 \
+                -e IONIC_LOCKFREE=all \
+                -e NCCL_MIN_NCHANNELS=64 \
+                -e NCCL_MAX_NCHANNELS=64 \
+                -e NCCL_NCHANNELS_PER_NET_PEER=16 \
+                -e NCCL_IB_QPS_PER_CONNECTION=1 \
+                -e NCCL_IB_TC=96 \
+                -e NCCL_IB_FIFO_TC=184 \
+                -e NCCL_IB_GID_INDEX=1 \
+                -e NCCL_IB_PCI_RELAXED_ORDERING=1 \
+                -e NCCL_PXN_DISABLE=1 \
+                -e NCCL_IGNORE_CPU_AFFINITY=1 \
+                -e NCCL_P2P_NET_CHUNKSIZE=262144 \
+                -e RCCL_P2P_SHIFT_SIZE=0 \
+                -e NCCL_GDRCOPY_ENABLE=0 \
+                -e NCCL_DMABUF_ENABLE=0 \
                 -e HF_HOME=/root/.cache/huggingface \
                 -e TRANSFORMERS_CACHE=/root/.cache/huggingface \
                 -e HF_DATASETS_CACHE=/root/.cache/huggingface/datasets \
