@@ -145,9 +145,9 @@ class DistBucketedWeightUpdateMixin:
             # int4/fp4 pre_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
+                    rollout_engines=self.rollout_engines,
                     restore_weights_before_load=True,
                     post_process_quantization=False,
-                    rollout_engines=self.rollout_engines,
                 )
 
     def _finalize_and_resume_engines(self) -> None:
@@ -159,9 +159,9 @@ class DistBucketedWeightUpdateMixin:
                 "mxfp8",
             ]:
                 post_process_weights(
+                    rollout_engines=self.rollout_engines,
                     restore_weights_before_load=False,
                     post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
                 )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
 

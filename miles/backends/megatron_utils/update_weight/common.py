@@ -275,18 +275,23 @@ def collect_named_tensors_for_weight_transfer(
 
 
 def post_process_weights(
-    restore_weights_before_load: bool,
-    post_process_quantization: bool,
     rollout_engines: Sequence[ActorHandle],
+    restore_weights_before_load: bool = False,
+    post_process_quantization: bool = False,
+    post_load_weights: bool = False,
 ):
     """
-    Trigger post-process for int4/fp4 quantization on all rollout engines.
+    Trigger post-process on all rollout engines,
+    including:
+        - int4/fp4 quantization
+        - post_load_weights (should be enabled when using p2p weights updating)
     """
     ray.get(
         [
             engine.post_process_weights.remote(
                 restore_weights_before_load=restore_weights_before_load,
                 post_process_quantization=post_process_quantization,
+                post_load_weights=post_load_weights,
             )
             for engine in rollout_engines
         ]

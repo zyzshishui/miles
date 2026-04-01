@@ -869,6 +869,8 @@ def _allocate_rollout_engine_addr_and_ports_normal(
             addr_and_ports[current_rank]["host"] = get_addr()
             addr_and_ports[current_rank]["port"] = get_port()
             addr_and_ports[current_rank]["nccl_port"] = get_port()
+            # Always allocate a unique engine_info_bootstrap_port per engine
+            addr_and_ports[current_rank]["engine_info_bootstrap_port"] = get_port()
 
             if worker_type == "prefill":
                 addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port()
