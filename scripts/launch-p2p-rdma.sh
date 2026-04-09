@@ -29,6 +29,9 @@ MILES_DIR="${WORKSPACE}/p2prdma/miles"
 SGLANG_DIR="${WORKSPACE}/p2prdma/sglang"
 
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-scripts/run-qwen3-235B-A22B-Instruct-2507-p2p.sh}"
+NETWORK_IFNAME="${NETWORK_IFNAME:-${MILES_SOCKET_IFNAME:-eno1}}"
+MILES_MOONCAKE_IB_DEVICE="${MILES_MOONCAKE_IB_DEVICE:-}"
+TRAIN_ENV="MILES_SOCKET_IFNAME=${NETWORK_IFNAME} MILES_MOONCAKE_IB_DEVICE=${MILES_MOONCAKE_IB_DEVICE}"
 SSH_OPTS="-F /dev/null -i ~/.ssh/cluster_id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=30"
 
 # ============== Helpers ==============
@@ -49,7 +52,7 @@ check_container() {
 }
 
 get_container_ip() {
-    ssh_cmd "$1" "docker exec ${CONTAINER_NAME} hostname -I" | awk '{print $1}'
+    docker_exec "$1" "cd ${MILES_DIR} && ${TRAIN_ENV} bash ${TRAIN_SCRIPT} print-ip"
 }
 
 # ============== Actions ==============
@@ -128,6 +131,7 @@ start_ray() {
     log "Starting Ray cluster..."
     local head_ip
     head_ip=$(get_container_ip "${HEAD_NODE}")
+    log "Using interface ${NETWORK_IFNAME}; head IP=${head_ip}; Mooncake IB=${MILES_MOONCAKE_IB_DEVICE:-auto}"
 
     # Cleanup all nodes
     for host in "${NODES[@]}"; do
@@ -138,7 +142,7 @@ start_ray() {
     sleep 3
 
     # Start head
-    docker_exec "${HEAD_NODE}" "cd ${MILES_DIR} && bash ${TRAIN_SCRIPT} head"
+    docker_exec "${HEAD_NODE}" "cd ${MILES_DIR} && ${TRAIN_ENV} bash ${TRAIN_SCRIPT} head"
     local retries=0
     while ! docker_exec "${HEAD_NODE}" "ray status" &>/dev/null; do
         retries=$((retries + 1))
@@ -149,7 +153,7 @@ start_ray() {
     # Start workers
     for ((i = 1; i < ${#NODES[@]}; i++)); do
         docker_exec "${NODES[$i]}" \
-            "cd ${MILES_DIR} && MASTER_ADDR=${head_ip} bash ${TRAIN_SCRIPT} worker" &
+            "cd ${MILES_DIR} && ${TRAIN_ENV} MASTER_ADDR=${head_ip} bash ${TRAIN_SCRIPT} worker" &
     done
     sleep 15
 
@@ -161,7 +165,7 @@ start_ray() {
 submit_job() {
     log "Submitting: ${TRAIN_SCRIPT}"
     docker_exec "${HEAD_NODE}" \
-        "cd ${MILES_DIR} && nohup bash ${TRAIN_SCRIPT} submit > nohup_p2p_rdma.out 2>&1 &"
+        "cd ${MILES_DIR} && nohup env ${TRAIN_ENV} bash ${TRAIN_SCRIPT} submit > nohup_p2p_rdma.out 2>&1 &"
     log "Logs: ssh ${HEAD_NODE} 'docker exec ${CONTAINER_NAME} tail -f ${MILES_DIR}/nohup_p2p_rdma.out'"
 }
 

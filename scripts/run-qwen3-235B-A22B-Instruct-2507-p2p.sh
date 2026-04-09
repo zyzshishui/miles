@@ -18,6 +18,30 @@ MILES_DIR="${MILES_DIR:-/workspace/p2prdma/miles}"
 SGLANG_DIR="${SGLANG_DIR:-/workspace/p2prdma/sglang}"
 export MODEL_ARGS_ROTARY_BASE=5000000
 export MILES_SOCKET_IFNAME="${MILES_SOCKET_IFNAME:-eno1}"
+export MILES_MOONCAKE_IB_DEVICE="${MILES_MOONCAKE_IB_DEVICE:-}"
+
+# ============== Network Helpers ==============
+resolve_ip_from_ifname() {
+    local ifname="${1:?interface name is required}"
+    python3 - "$ifname" <<'PY'
+import fcntl
+import socket
+import struct
+import sys
+
+ifname = sys.argv[1]
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    result = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack("256s", ifname[:15].encode()))
+except OSError as exc:
+    raise SystemExit(f"Failed to resolve IPv4 for interface {ifname}: {exc}")
+print(socket.inet_ntoa(result[20:24]))
+PY
+}
+
+resolve_local_ip() {
+    resolve_ip_from_ifname "${MILES_SOCKET_IFNAME}"
+}
 
 # ============== Environment ==============
 setup_env() {
@@ -25,8 +49,12 @@ setup_env() {
     export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"}
     export PYTORCH_HIP_ALLOC_CONF=${PYTORCH_HIP_ALLOC_CONF:-"expandable_segments:True"}
     export NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
+    export MILES_HOST_IP="$(resolve_local_ip)"
+    export SGLANG_LOCAL_IP_NIC="${SGLANG_LOCAL_IP_NIC:-${MILES_SOCKET_IFNAME}}"
+    export RAY_NODE_IP_ADDRESS="${RAY_NODE_IP_ADDRESS:-${MILES_HOST_IP}}"
     export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-${MILES_SOCKET_IFNAME}}
     export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-${MILES_SOCKET_IFNAME}}
+    export SGLANG_MOONCAKE_IB_DEVICE="${SGLANG_MOONCAKE_IB_DEVICE:-${MILES_MOONCAKE_IB_DEVICE}}"
     export NCCL_DEBUG=${NCCL_DEBUG:-VERSION}
 }
 
@@ -40,8 +68,8 @@ cleanup() {
 # ============== Ray Head/Worker ==============
 run_head() {
     setup_env; cleanup
-    export MASTER_ADDR=$(hostname -I | awk '{print $1}')
-    echo "=== Ray Head (235B P2P) IP=${MASTER_ADDR} GPUs=${NUM_GPUS} ==="
+    export MASTER_ADDR="${MILES_HOST_IP}"
+    echo "=== Ray Head (235B P2P) IFACE=${MILES_SOCKET_IFNAME} IP=${MASTER_ADDR} GPUs=${NUM_GPUS} MOONCAKE_IB=${SGLANG_MOONCAKE_IB_DEVICE:-auto} ==="
     ray start --head \
         --node-ip-address ${MASTER_ADDR} \
         --num-gpus ${NUM_GPUS} \
@@ -53,8 +81,8 @@ run_head() {
 run_worker() {
     [ -z "${MASTER_ADDR:-}" ] && echo "Error: MASTER_ADDR not set" && exit 1
     setup_env; cleanup
-    local worker_ip=$(hostname -I | awk '{print $1}')
-    echo "=== Ray Worker (235B P2P) Head=${MASTER_ADDR} Worker=${worker_ip} ==="
+    local worker_ip="${MILES_HOST_IP}"
+    echo "=== Ray Worker (235B P2P) IFACE=${MILES_SOCKET_IFNAME} Head=${MASTER_ADDR} Worker=${worker_ip} MOONCAKE_IB=${SGLANG_MOONCAKE_IB_DEVICE:-auto} ==="
     ray start \
         --address=${MASTER_ADDR}:6379 \
         --num-gpus ${NUM_GPUS} \
@@ -71,7 +99,7 @@ run_submit() {
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
     cd "${SCRIPT_DIR}/.."
 
-    export MASTER_ADDR=$(hostname -I | awk '{print $1}')
+    export MASTER_ADDR="${MILES_HOST_IP}"
     export PYTHONUNBUFFERED=1
     export DEPRECATED_MEGATRON_COMPATIBLE=1
 
@@ -149,6 +177,10 @@ run_submit() {
         --sglang-remote-instance-weight-loader-start-seed-via-transfer-engine
     )
 
+    if [ -n "${SGLANG_MOONCAKE_IB_DEVICE}" ]; then
+        SGLANG_ARGS+=(--sglang-mooncake-ib-device "${SGLANG_MOONCAKE_IB_DEVICE}")
+    fi
+
     MISC_ARGS=(
         --attention-dropout 0.0
         --hidden-dropout 0.0
@@ -198,6 +230,10 @@ run_submit() {
                 \"RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES\": \"1\",
                 \"HIP_VISIBLE_DEVICES\": \"0,1,2,3,4,5,6,7\",
                 \"PYTORCH_HIP_ALLOC_CONF\": \"expandable_segments:True\",
+                \"MILES_SOCKET_IFNAME\": \"${MILES_SOCKET_IFNAME}\",
+                \"MILES_MOONCAKE_IB_DEVICE\": \"${MILES_MOONCAKE_IB_DEVICE}\",
+                \"SGLANG_LOCAL_IP_NIC\": \"${SGLANG_LOCAL_IP_NIC}\",
+                \"SGLANG_MOONCAKE_IB_DEVICE\": \"${SGLANG_MOONCAKE_IB_DEVICE}\",
                 \"GLOO_SOCKET_IFNAME\": \"${GLOO_SOCKET_IFNAME}\",
                 \"NCCL_SOCKET_IFNAME\": \"${NCCL_SOCKET_IFNAME}\",
                 \"no_proxy\": \"${MASTER_ADDR},127.0.0.1\",
@@ -207,11 +243,17 @@ run_submit() {
         -- python3 "${TRAIN_ARGS[@]}"
 }
 
+print_ip() {
+    setup_env
+    echo "${MILES_HOST_IP}"
+}
+
 # ============== Main ==============
-[ $# -lt 1 ] && echo "Usage: bash $0 {head|worker|submit}" && exit 1
+[ $# -lt 1 ] && echo "Usage: bash $0 {head|worker|submit|print-ip}" && exit 1
 case "$1" in
     head)   run_head ;;
     worker) run_worker ;;
     submit) run_submit ;;
+    print-ip) print_ip ;;
     *)      echo "Unknown command: $1"; exit 1 ;;
 esac

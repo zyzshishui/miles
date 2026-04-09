@@ -1,5 +1,7 @@
 import dataclasses
+import json
 import logging
+import os
 from argparse import Namespace
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -205,11 +207,37 @@ def register_cpu_memory(params_dict: dict, transfer_engine) -> dict:
     return weight_dict
 
 
+def resolve_mooncake_ib_device() -> str:
+    config = os.environ.get("MILES_MOONCAKE_IB_DEVICE") or os.environ.get("SGLANG_MOONCAKE_IB_DEVICE") or ""
+    if not config:
+        return ""
+
+    if os.path.isfile(config):
+        with open(config) as f:
+            config = json.load(f).get(str(int(os.environ.get("LOCAL_RANK", 0))), "")
+        return config or ""
+
+    if "," in config:
+        devices = [device.strip() for device in config.split(",") if device.strip()]
+        if devices:
+            return devices[int(os.environ.get("LOCAL_RANK", 0)) % len(devices)]
+        return ""
+
+    return config
+
+
 def create_transfer_engine():
     transfer_engine = TransferEngine()
     local_ip = ray._private.services.get_node_ip_address()
-    transfer_engine.initialize(local_ip, "P2PHANDSHAKE", "rdma", "")
+    transfer_engine.initialize(local_ip, "P2PHANDSHAKE", "rdma", resolve_mooncake_ib_device())
     return transfer_engine
+
+
+def unpack_remote_transfer_engine_info(remote_info):
+    """Keep compatibility with sglang endpoints that append warmup metadata."""
+    if len(remote_info) < 2:
+        raise ValueError("remote_instance_transfer_engine_info must contain at least session_id and weights_info")
+    return remote_info[0], remote_info[1]
 
 
 def query_remote_weight_infos(
@@ -223,8 +251,10 @@ def query_remote_weight_infos(
     targets_to_query = set((target.engine_ind, target.engine_rank) for target in targets)
 
     for engine_ind, engine_rank in targets_to_query:
-        session_id, weights_info = ray.get(
+        session_id, weights_info = unpack_remote_transfer_engine_info(
+            ray.get(
             rollout_engines[engine_ind].get_remote_instance_transfer_engine_info.remote(rank=engine_rank)
+            )
         )
         parallelism_info = ray.get(rollout_engines[engine_ind].get_parallelism_info.remote(rank=engine_rank))
 
