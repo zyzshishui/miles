@@ -18,7 +18,8 @@ MILES_DIR="${MILES_DIR:-/workspace/p2prdma/miles}"
 SGLANG_DIR="${SGLANG_DIR:-/workspace/p2prdma/sglang}"
 export MODEL_ARGS_ROTARY_BASE=5000000
 export MILES_SOCKET_IFNAME="${MILES_SOCKET_IFNAME:-eno1}"
-export MILES_MOONCAKE_IB_DEVICE="${MILES_MOONCAKE_IB_DEVICE:-}"
+DEFAULT_MOONCAKE_IB_DEVICE="rdma0,rdma1,rdma2,rdma3,rdma4,rdma5,rdma6,rdma7"
+export MILES_MOONCAKE_IB_DEVICE="${MILES_MOONCAKE_IB_DEVICE:-${DEFAULT_MOONCAKE_IB_DEVICE}}"
 
 # ============== Network Helpers ==============
 resolve_ip_from_ifname() {
@@ -55,6 +56,7 @@ setup_env() {
     export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-${MILES_SOCKET_IFNAME}}
     export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-${MILES_SOCKET_IFNAME}}
     export SGLANG_MOONCAKE_IB_DEVICE="${SGLANG_MOONCAKE_IB_DEVICE:-${MILES_MOONCAKE_IB_DEVICE}}"
+    export MOONCAKE_DEVICE="${MOONCAKE_DEVICE:-${SGLANG_MOONCAKE_IB_DEVICE}}"
     export NCCL_DEBUG=${NCCL_DEBUG:-VERSION}
 }
 
@@ -120,7 +122,7 @@ run_submit() {
         --label-key label
         --apply-chat-template
         --rollout-shuffle
-        --rm-type deepscaler
+        --rm-type math
         --num-rollout 3000
         --rollout-batch-size 32
         --n-samples-per-prompt 8
@@ -160,19 +162,14 @@ run_submit() {
         --weight-decay 0.1
         --adam-beta1 0.9
         --adam-beta2 0.98
-        --optimizer-cpu-offload
-        --overlap-cpu-optimizer-d2h-h2d
         --use-precision-aware-optimizer
-        # --disable-weights-backuper
-        # --exp-avg-dtype bf16
-        # --exp-avg-sq-dtype bf16
     )
 
     SGLANG_ARGS=(
         --rollout-num-gpus-per-engine 8
         --sglang-ep-size 8
-        --sglang-mem-fraction-static 0.7
-        --sglang-max-total-tokens 163840
+        --sglang-mem-fraction-static 1.0
+        --sglang-max-total-tokens 262144
         --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
         --sglang-remote-instance-weight-loader-start-seed-via-transfer-engine
     )
@@ -232,6 +229,7 @@ run_submit() {
                 \"PYTORCH_HIP_ALLOC_CONF\": \"expandable_segments:True\",
                 \"MILES_SOCKET_IFNAME\": \"${MILES_SOCKET_IFNAME}\",
                 \"MILES_MOONCAKE_IB_DEVICE\": \"${MILES_MOONCAKE_IB_DEVICE}\",
+                \"MOONCAKE_DEVICE\": \"${MOONCAKE_DEVICE}\",
                 \"SGLANG_LOCAL_IP_NIC\": \"${SGLANG_LOCAL_IP_NIC}\",
                 \"SGLANG_MOONCAKE_IB_DEVICE\": \"${SGLANG_MOONCAKE_IB_DEVICE}\",
                 \"GLOO_SOCKET_IFNAME\": \"${GLOO_SOCKET_IFNAME}\",
