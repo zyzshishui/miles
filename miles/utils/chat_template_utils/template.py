@@ -74,18 +74,17 @@ def _normalize_tool_arguments(messages: list[dict]) -> list[dict]:
 
 
 def extract_tool_dicts(tools: list[dict] | None) -> list[dict] | None:
-    """Canonicalize tools via Pydantic, returning full Tool model dumps.
+    """Canonicalize tools via Pydantic, returning SGLang's template tool dicts.
 
-    Matches SGLang's ``_process_messages`` (``serving_chat.py`` lines 343-344):
-    ``tools = [item.model_dump() for item in request.tools]`` — each tool is
-    a full ``Tool`` model dump (``{"type": "function", "function": {...}}``).
+    Matches SGLang's ``_process_messages`` primary path:
+    ``tools = [item.function.model_dump() for item in request.tools]``.
     """
     if not tools:
         return None
 
     wrapped = [t if isinstance(t, dict) and "function" in t else {"type": "function", "function": t} for t in tools]
     validated = TypeAdapter(list[Tool]).validate_python(wrapped)
-    return [tool.model_dump() for tool in validated]
+    return [tool.function.model_dump() for tool in validated]
 
 
 def apply_chat_template_from_str(
@@ -122,7 +121,7 @@ def apply_chat_template_from_str(
     except TemplateError as e:
         if tool_defs is not None:
             try:
-                return _render([t["function"] if "function" in t else t for t in tool_defs])
+                return _render([t if "function" in t else {"function": t} for t in tool_defs])
             except TemplateError as te:
                 raise ValueError(f"Chat template rendering failed (tool format fallback): {te}") from te
         raise ValueError(f"Chat template rendering failed: {e}") from e
@@ -206,6 +205,81 @@ def assert_messages_append_only_with_allowed_role(
             )
 
 
+def _is_deepseek_v4_tokenizer(tokenizer: Any) -> bool:
+    # TODO: Is there a better way to check?
+    names = [getattr(tokenizer, "name_or_path", None)]
+    init_kwargs = getattr(tokenizer, "init_kwargs", None)
+    if isinstance(init_kwargs, dict):
+        names.append(init_kwargs.get("name_or_path"))
+
+    for name in names:
+        if name and "deepseek-v4" in str(name).lower().replace("_", "-"):
+            return True
+    return False
+
+
+def _canonicalize_deepseek_v4_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Match SGLang's DSv4 OpenAI Tool canonicalization before encoding."""
+    wrapped = [
+        tool if isinstance(tool, dict) and "function" in tool else {"type": "function", "function": tool}
+        for tool in tools
+    ]
+    validated = TypeAdapter(list[Tool]).validate_python(copy.deepcopy(wrapped))
+    return [tool.model_dump() for tool in validated]
+
+
+def _render_deepseek_v4_messages(
+    messages: list[dict[str, Any]],
+    *,
+    add_generation_prompt: bool,
+    tools: list[dict[str, Any]] | None = None,
+    **kwargs,
+) -> str:
+    from sglang.srt.entrypoints.openai import encoding_dsv4
+    from sglang.srt.parser.jinja_template_utils import process_content_for_template_format
+
+    remaining_kwargs = dict(kwargs)
+    thinking = remaining_kwargs.pop("thinking", remaining_kwargs.pop("enable_thinking", False))
+    reasoning_effort = remaining_kwargs.pop("reasoning_effort", None)
+    if remaining_kwargs:
+        raise ValueError(f"Unsupported DeepSeek V4 chat-template kwargs: {sorted(remaining_kwargs)}")
+
+    rendered_messages = copy.deepcopy(messages)
+    for i, msg in enumerate(rendered_messages):
+        if isinstance(msg.get("content"), list):
+            rendered_messages[i] = process_content_for_template_format(msg, "string", [], [], [], [])
+            msg = rendered_messages[i]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            if msg.get("content") is None:
+                msg["content"] = ""
+            for tool_call in msg["tool_calls"]:
+                function = tool_call.get("function", {})
+                arguments = function.get("arguments")
+                if isinstance(arguments, dict):
+                    function["arguments"] = json.dumps(arguments, ensure_ascii=False)
+
+    if not rendered_messages or rendered_messages[0].get("role") != "system":
+        rendered_messages.insert(0, {"role": "system", "content": ""})
+    if tools:
+        rendered_messages[0]["tools"] = _canonicalize_deepseek_v4_tools(tools)
+
+    prompt = encoding_dsv4.encode_messages(
+        rendered_messages,
+        thinking_mode="thinking" if thinking else "chat",
+        reasoning_effort=reasoning_effort if reasoning_effort in ("max", "high") else None,
+    )
+    if add_generation_prompt:
+        return prompt
+
+    for suffix in (
+        encoding_dsv4.ASSISTANT_SP_TOKEN + encoding_dsv4.thinking_start_token,
+        encoding_dsv4.ASSISTANT_SP_TOKEN + encoding_dsv4.thinking_end_token,
+    ):
+        if prompt.endswith(suffix):
+            return prompt[: -len(suffix)]
+    return prompt
+
+
 def apply_chat_template(
     messages: list[dict],
     *,
@@ -221,6 +295,17 @@ def apply_chat_template(
     ensuring the result is ``str`` (tokenize=False) or ``list[int]``
     (tokenize=True), not a ``BatchEncoding`` or ``dict``.
     """
+    if _is_deepseek_v4_tokenizer(tokenizer):
+        rendered = _render_deepseek_v4_messages(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+            tools=tools,
+            **kwargs,
+        )
+        if tokenize:
+            return tokenizer.encode(rendered, add_special_tokens=False)
+        return rendered
+
     messages = _normalize_tool_arguments(messages)
     tool_defs = extract_tool_dicts(tools)
     render_kwargs = dict(add_generation_prompt=add_generation_prompt, **kwargs)
@@ -235,7 +320,7 @@ def apply_chat_template(
                 return tokenizer.apply_chat_template(
                     messages,
                     tokenize=tokenize,
-                    tools=[t["function"] if "function" in t else t for t in tool_defs],
+                    tools=[t if "function" in t else {"function": t} for t in tool_defs],
                     return_dict=False,
                     **render_kwargs,
                 )

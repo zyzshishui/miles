@@ -139,6 +139,21 @@ class TITOTokenizer:
     def _encode_text(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False)
 
+    def tokenize_prompt(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        *,
+        add_generation_prompt: bool = True,
+    ) -> list[int]:
+        return self._encode_text(
+            self._render_messages(
+                messages,
+                add_generation_prompt=add_generation_prompt,
+                tools=tools,
+            )
+        )
+
     def _split_appended_segments(self, appended_messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         segments: list[list[dict[str, Any]]] = []
         i = 0
@@ -458,6 +473,65 @@ class GLM47TITOTokenizer(TITOTokenizer):
 
 
 # ---------------------------------------------------------------------------
+# DeepSeek V4 implementation
+# ---------------------------------------------------------------------------
+
+
+class DeepSeekV4TITOTokenizer(TITOTokenizer):
+    """DeepSeek V4 — official encoder via SGLang."""
+
+    reasoning_parser = "deepseek-v4"
+    tool_call_parser = "deepseekv4"
+
+    SUPPORTED_TEMPLATES = (
+        FixedTemplateRow(
+            allowed_roles=frozenset({"tool"}),
+            template=None,
+        ),
+    )
+
+    _default_assistant_start_str: str = "<｜Assistant｜>"
+
+    def __init__(
+        self,
+        tokenizer: Any,
+        chat_template_kwargs: dict[str, Any] | None = None,
+        assistant_start_str: str | None = None,
+        allowed_append_roles: list[str] | None = None,
+    ):
+        super().__init__(
+            tokenizer,
+            chat_template_kwargs,
+            assistant_start_str or self._default_assistant_start_str,
+            allowed_append_roles=allowed_append_roles,
+        )
+        self._user_id: int = tokenizer.convert_tokens_to_ids("<｜User｜>")
+        self._assistant_id: int = tokenizer.convert_tokens_to_ids("<｜Assistant｜>")
+
+    def create_comparator(self) -> TokenSeqComparator:
+        return TokenSeqComparator(
+            self.tokenizer,
+            assistant_start_str=self._assistant_start_str,
+            special_token_ids={self._user_id, self._assistant_id},
+            trim_trailing_ids=self.trailing_token_ids or None,
+        )
+
+    def _split_appended_segments(self, appended_messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        segments: list[list[dict[str, Any]]] = []
+        i = 0
+        while i < len(appended_messages):
+            role = appended_messages[i]["role"]
+            if role != "tool":
+                raise ValueError(f"unsupported appended role for DeepSeek V4 TITO tokenization: {role}")
+            j = i + 1
+            while j < len(appended_messages) and appended_messages[j]["role"] == "tool":
+                j += 1
+            segments.append(appended_messages[i:j])
+            i = j
+        return segments
+
+
+# ---------------------------------------------------------------------------
 # Enum + Registry + Factory
 # ---------------------------------------------------------------------------
 
@@ -468,6 +542,7 @@ class TITOTokenizerType(str, Enum):
     QWEN35 = "qwen35"
     QWENNEXT = "qwennext"
     GLM47 = "glm47"
+    DEEPSEEKV4 = "deepseekv4"
 
 
 _TOKENIZER_REGISTRY: dict[TITOTokenizerType, type[TITOTokenizer]] = {
@@ -476,6 +551,7 @@ _TOKENIZER_REGISTRY: dict[TITOTokenizerType, type[TITOTokenizer]] = {
     TITOTokenizerType.QWEN35: Qwen35TITOTokenizer,
     TITOTokenizerType.QWENNEXT: QwenNextTITOTokenizer,
     TITOTokenizerType.GLM47: GLM47TITOTokenizer,
+    TITOTokenizerType.DEEPSEEKV4: DeepSeekV4TITOTokenizer,
 }
 
 

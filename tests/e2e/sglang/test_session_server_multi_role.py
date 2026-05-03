@@ -99,6 +99,14 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
         tp_size=2,
         cycles=2,
     ),
+    "deepseekv4-tool": ModelConfig(
+        model_name="sgl-project/DeepSeek-V4-Flash-FP8",
+        reasoning_parser="deepseek-v4",
+        tool_call_parser="deepseekv4",
+        tito_model="deepseekv4",
+        allowed_append_roles=("tool",),
+        tp_size=4,
+    ),
 }
 
 DEFAULT_MODEL_FAMILY = "glm47-multi-role"
