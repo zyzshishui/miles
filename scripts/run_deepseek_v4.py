@@ -144,6 +144,22 @@ def _is_flash_partial(args: ScriptArgs) -> bool:
     }
 
 
+def _is_rocm() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return torch.version.hip is not None
+
+
+def _use_rocm_flash_rollout_safe_mode(args: ScriptArgs) -> bool:
+    return (
+        _is_rocm()
+        and args.num_nodes == 1
+        and args.model_name.startswith("DeepSeek-V4-Flash-FP8")
+    )
+
+
 def _patch_partial_model_type(args: ScriptArgs):
     """TMP: patch sglang model type for partial prunes.
 
@@ -487,26 +503,42 @@ def _train(args: ScriptArgs):
         sglang_dp_size = sglang_world_size
         sglang_ep_size = sglang_world_size
         sglang_a2a_backend = None
+    rocm_flash_safe_mode = _use_rocm_flash_rollout_safe_mode(args)
+    if rocm_flash_safe_mode:
+        # SGLang DP attention currently produces rollout logprobs that do not
+        # match Megatron on ROCm DeepSeek V4 Flash. Keep TP/EP on all GPUs, but
+        # route requests through one SGLang data-parallel group.
+        sglang_dp_size = 1
     sglang_page_size = 256
     sglang_chunked_prefill_size = (
         2048
         if args.num_nodes == 1 and args.model_name == "DeepSeek-V4-Flash-FP8"
         else 8192
     )
+    sglang_max_running_requests = 8 if rocm_flash_safe_mode else 64
+    sglang_mem_fraction_static = 0.24 if rocm_flash_safe_mode else 0.7
     sglang_args = (
         f"--rollout-num-gpus-per-engine {sglang_world_size} "
         f"--sglang-tp-size {sglang_tp_size} "
         f"--sglang-dp-size {sglang_dp_size} "
-        "--sglang-enable-dp-attention "
         "--sglang-attention-backend compressed "
         f"--sglang-page-size {sglang_page_size} "
-        "--sglang-max-running-requests 64 "
+        f"--sglang-max-running-requests {sglang_max_running_requests} "
         f"--sglang-chunked-prefill-size {sglang_chunked_prefill_size} "
         "--sglang-server-concurrency 1024 "
         "--router-health-success-threshold 1 "
         "--router-health-check-interval-secs 15 "
         "--router-health-failure-threshold 40 "  # TODO improve
     )
+    if sglang_dp_size > 1:
+        sglang_args += "--sglang-enable-dp-attention "
+    if rocm_flash_safe_mode:
+        sglang_args += (
+            "--sglang-max-total-tokens 4096 "
+            "--sglang-disable-cuda-graph "
+            "--sglang-disable-custom-all-reduce "
+            "--sglang-schedule-conservativeness 1.0 "
+        )
     if sglang_a2a_backend:
         sglang_args += (
             f"--sglang-moe-a2a-backend {sglang_a2a_backend} "
@@ -528,6 +560,8 @@ def _train(args: ScriptArgs):
     if args.model_name.startswith("DeepSeek-V4-Flash-FP8"):
         extra_env_vars["MILES_DSV4_CKPT_VERSION"] = "0415"
         extra_env_vars["MEGATRON_USE_KV_QAT"] = "1"
+    if rocm_flash_safe_mode:
+        extra_env_vars["SGLANG_TOPK_TRANSFORM_512_TORCH"] = "1"
     if args.model_name == "DeepSeek-V4-Flash-FP8-4layer":
         extra_env_vars["SGLANG_APPLY_CONFIG_BACKUP"] = "none"
     if args.model_name == "DeepSeek-V4-Pro-FP8":
@@ -543,7 +577,7 @@ def _train(args: ScriptArgs):
         f"--actor-num-gpus-per-node {args.num_gpus_per_node} "
         f"--num-gpus-per-node {args.num_gpus_per_node} "
         "--train-memory-margin-bytes 3221225472 "
-        "--sglang-mem-fraction-static 0.7 "
+        f"--sglang-mem-fraction-static {sglang_mem_fraction_static} "
         "--accumulate-allreduce-grads-in-fp32 "
         "--model-name deepseekv4 "  # for mbridge load
         "--qkv-format bshd "
