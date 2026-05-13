@@ -24,8 +24,11 @@ def train(args):
     if args.offload_rollout:
         ray.get(rollout_manager.onload_weights.remote())
 
-    # always update weight first so that sglang has the loaded weights from training.
-    actor_model.update_weights()
+    # Normally the rollout engines must receive the actor checkpoint before rollout.
+    # For memory-constrained debug runs, both sides may be launched from the same
+    # checkpoint and the initial sync can be skipped explicitly.
+    if not args.skip_initial_update_weights:
+        actor_model.update_weights()
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
@@ -85,6 +88,9 @@ def train(args):
             ray.get(critic_train_handle)
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
+
+        if args.skip_train:
+            continue
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             save(rollout_id)

@@ -69,6 +69,7 @@ miles is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
    :caption: Hardware Platforms
 
    platform_support/amd_tutorial.md
+   platform_support/deepseek_v4_rocm_status.md
 
 .. toctree::
    :maxdepth: 1

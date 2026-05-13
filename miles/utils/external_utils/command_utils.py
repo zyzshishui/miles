@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import random
+import shlex
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -17,6 +18,41 @@ from miles.utils.typer_utils import dataclass_cli
 _ = exec_command, exec_command_all_ray_node, dataclass_cli
 
 repo_base_dir = Path(os.path.abspath(__file__)).resolve().parents[3]
+
+
+def _pythonpath_with_repo(*paths: str | Path) -> str:
+    entries = [str(repo_base_dir), *(str(path) for path in paths)]
+    if existing := os.environ.get("PYTHONPATH"):
+        entries.append(existing)
+    return os.pathsep.join(entries)
+
+
+def _ray_rocm_env_vars(*, no_set_visible_devices: bool = True, default_visible_devices: str | None = None) -> dict[str, str]:
+    import torch
+
+    if torch.version.hip is None:
+        return {}
+
+    visible_devices = os.environ.get("HIP_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
+    visible_devices = visible_devices or default_visible_devices
+    if visible_devices is None:
+        return {}
+
+    env_vars = {
+        # Ray's AMD manager asserts that HIP_VISIBLE_DEVICES and
+        # CUDA_VISIBLE_DEVICES match when CUDA_VISIBLE_DEVICES is non-empty.
+        # Keep HIP visible for Torch on ROCm, and clear CUDA so Ray does not
+        # reject the job driver before it can initialize.
+        "HIP_VISIBLE_DEVICES": visible_devices,
+        "CUDA_VISIBLE_DEVICES": "",
+    }
+    if no_set_visible_devices:
+        env_vars["RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES"] = "1"
+    return env_vars
+
+
+def _shell_env_assignments(env_vars: dict[str, str]) -> str:
+    return " ".join(f"{key}={shlex.quote(str(value))}" for key, value in env_vars.items())
 
 
 def convert_checkpoint(
@@ -49,9 +85,11 @@ def convert_checkpoint(
         fn = partial(exec_command_all_ray_node, num_nodes=num_nodes)
     else:
         fn = exec_command
+    pythonpath = _pythonpath_with_repo(megatron_path)
     fn(
         f"source {repo_base_dir}/scripts/models/{megatron_model_type}.sh && "
-        f"PYTHONPATH={megatron_path} "
+        "CUDA_DEVICE_MAX_CONNECTIONS=1 "
+        f"PYTHONPATH={pythonpath} "
         f"torchrun "
         f"--nproc-per-node {num_gpus_per_node} "
         f"{multinode_args}"
@@ -143,51 +181,75 @@ def execute_train(
     if (f := before_ray_job_submit) is not None:
         f()
 
+    pythonpath = _pythonpath_with_repo(megatron_path)
+    common_env_vars = {
+        "PYTHONPATH": pythonpath,
+        # If setting this in FSDP, the computation communication overlapping may have issues
+        **(
+            {}
+            if train_backend_fsdp
+            else {
+                "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+            }
+        ),
+        "NCCL_NVLS_ENABLE": os.environ.get("NCCL_NVLS_ENABLE", str(int(check_has_nvlink()))),
+        **{k: os.environ[k] for k in ("NCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME") if k in os.environ},
+        "no_proxy": f"127.0.0.1,{master_addr}",
+        # This is needed by megatron / torch distributed in multi-node setup
+        "MASTER_ADDR": master_addr,
+        **(
+            {
+                "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
+                "CUDA_COREDUMP_SHOW_PROGRESS": "1",
+                "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
+                "CUDA_COREDUMP_FILE": f"{config.output_dir}/cuda_coredump_%h.%p.%t",
+            }
+            if config.cuda_core_dump
+            else {}
+        ),
+        **extra_env_vars,
+        **_parse_extra_env_vars(config.extra_env_vars),
+    }
+
+    default_visible_devices = ",".join(str(i) for i in range(num_gpus_per_node))
     runtime_env_json = json.dumps(
         {
             "env_vars": {
-                "PYTHONPATH": megatron_path,
-                # If setting this in FSDP, the computation communication overlapping may have issues
-                **(
-                    {}
-                    if train_backend_fsdp
-                    else {
-                        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-                    }
-                ),
-                "NCCL_NVLS_ENABLE": os.environ.get("NCCL_NVLS_ENABLE", str(int(check_has_nvlink()))),
-                **{k: os.environ[k] for k in ("NCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME") if k in os.environ},
-                "no_proxy": f"127.0.0.1,{master_addr}",
-                # This is needed by megatron / torch distributed in multi-node setup
-                "MASTER_ADDR": master_addr,
-                **(
-                    {
-                        "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
-                        "CUDA_COREDUMP_SHOW_PROGRESS": "1",
-                        "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
-                        "CUDA_COREDUMP_FILE": f"{config.output_dir}/cuda_coredump_%h.%p.%t",
-                    }
-                    if config.cuda_core_dump
-                    else {}
-                ),
-                **extra_env_vars,
-                **_parse_extra_env_vars(config.extra_env_vars),
+                **common_env_vars,
+                **_ray_rocm_env_vars(default_visible_devices=default_visible_devices),
             }
         }
     )
 
+    cmd_megatron_model_source = (
+        f'source "{repo_base_dir}/scripts/models/{megatron_model_type}.sh" && '
+        if megatron_model_type is not None
+        else ""
+    )
     if get_bool_env_var("MILES_SCRIPT_ENABLE_RAY_SUBMIT", "1"):
-        cmd_megatron_model_source = (
-            f'source "{repo_base_dir}/scripts/models/{megatron_model_type}.sh" && '
-            if megatron_model_type is not None
-            else ""
-        )
         exec_command(
             f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
             f"{cmd_megatron_model_source}"
             f"""ray job submit {'' if 'RAY_ADDRESS' in os.environ else '--address="http://127.0.0.1:8265" '}"""
             f"--runtime-env-json='{runtime_env_json}' "
             f"-- python3 {train_script} "
+            f"{'${MODEL_ARGS[@]}' if megatron_model_type is not None else ''} "
+            f"{train_args}"
+        )
+    else:
+        direct_env_vars = {
+            **common_env_vars,
+            **_ray_rocm_env_vars(
+                no_set_visible_devices=False,
+                default_visible_devices=default_visible_devices,
+            ),
+            "RAY_ADDRESS": os.environ.get("RAY_ADDRESS", "auto"),
+        }
+        exec_command(
+            f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
+            f"{cmd_megatron_model_source}"
+            f"{_shell_env_assignments(direct_env_vars)} "
+            f"python3 {train_script} "
             f"{'${MODEL_ARGS[@]}' if megatron_model_type is not None else ''} "
             f"{train_args}"
         )

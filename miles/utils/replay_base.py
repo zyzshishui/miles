@@ -52,6 +52,8 @@ class Replay:
 class BaseReplayManager:
     name: str = ""
     filename: str = ""
+    enable_check_replay_result = False
+    replay_check_threshold = 1e-2
 
     def __init__(self):
         self.replays: list[Replay] = []
@@ -83,12 +85,15 @@ class BaseReplayManager:
 
         def _get_replay_result(top_indices, scores, topk, *args, **kwargs):
             assert (
-                top_indices.shape[0] == scores.shape[0]
-            ), f"rank {_get_rank()}: replay n_tokens {top_indices.shape[0]} does not match scores n_tokens {scores.shape[0]}"
+                top_indices.shape[:-1] == scores.shape[:-1]
+            ), (
+                f"rank {_get_rank()}: replay leading shape {tuple(top_indices.shape[:-1])} "
+                f"does not match scores leading shape {tuple(scores.shape[:-1])}"
+            )
 
             assert (
-                top_indices.shape[1] == topk
-            ), f"replay topk does not match expected topk, replay topk {top_indices.shape[1]}, topk {topk}"
+                top_indices.shape[-1] == topk
+            ), f"replay topk does not match expected topk, replay topk {top_indices.shape[-1]}, topk {topk}"
 
             if self.enable_check_replay_result:
                 self.check_replay_result(old_topk_fn, scores, topk, top_indices, *args, **kwargs)
@@ -97,11 +102,11 @@ class BaseReplayManager:
             if padding_mask.any():
                 top_indices[padding_mask] = (
                     torch.arange(padding_mask.sum(), device=top_indices.device, dtype=top_indices.dtype)
-                    % scores.shape[1]
+                    % scores.shape[-1]
                 )
 
             if return_probs:
-                return scores.gather(1, top_indices), top_indices
+                return scores.gather(-1, top_indices), top_indices
             else:
                 return top_indices
 
@@ -206,7 +211,8 @@ class IndexerReplayManager(BaseReplayManager):
     data_key = "rollout_indexer_topk"
     if_sp_region = False
     squeeze_batch_for_load_from_file = True  # indexer has (batch, seq, topk) format, squeeze batch dim
-    thresh_check_replay_result = 0.7
+    enable_check_replay_result = False
+    replay_check_threshold = 0.7
 
 
 routing_replay_manager = RoutingReplayManager()

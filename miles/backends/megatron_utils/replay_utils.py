@@ -45,7 +45,15 @@ def _register_replay_list_attention(replay_list, replay_data, models):
             if compress_ratios[layer_id] != 4:
                 continue
 
-            replay_list[replay_offset + local_offset].record(replay_data[:, global_c4_offset + local_offset])
+            replay_layer_idx = global_c4_offset + local_offset
+            if replay_data.dim() == 4:
+                layer_data = replay_data[:, :, replay_layer_idx]
+            elif replay_data.dim() == 3:
+                layer_data = replay_data[:, replay_layer_idx]
+            else:
+                raise ValueError(f"Unsupported indexer replay_data shape: {tuple(replay_data.shape)}")
+
+            replay_list[replay_offset + local_offset].record(layer_data)
             local_offset += 1
 
         replay_offset += local_offset

@@ -278,5 +278,8 @@ def _wrap_low_level_call():
         yield
     except Exception as e:
         mem_info = print_memory("after torch distributed error")
-        e.add_note(f"{mem_info=}")
+        if hasattr(e, "add_note"):
+            e.add_note(f"{mem_info=}")
+        else:
+            logger.error("Torch distributed error memory info: %s", mem_info)
         raise

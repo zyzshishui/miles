@@ -15,6 +15,7 @@ def sparse_attn_torch(q, kv, attn_sink, topk_idxs, sm_scale=None):
     Returns:
         o: (b, m, h, d)
     """
+    output_dtype = q.dtype
     q = q.float()
     kv = kv.float()
 
@@ -57,7 +58,7 @@ def sparse_attn_torch(q, kv, attn_sink, topk_idxs, sm_scale=None):
 
     o = numerator / denominator.unsqueeze(-1)
 
-    return o.to(q.dtype)
+    return o.to(output_dtype)
 
 
 def dense_attn_torch(q, kv, attn_sink, topk_idxs, sm_scale=None):

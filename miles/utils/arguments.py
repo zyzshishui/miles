@@ -158,6 +158,15 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
             )
             parser.add_argument(
+                "--disable-distributed-optimizer",
+                action="store_true",
+                default=False,
+                help=(
+                    "Disable Megatron's distributed optimizer. This is mainly useful for memory-constrained "
+                    "debug runs where the extra distributed-optimizer param buffer prevents model init."
+                ),
+            )
+            parser.add_argument(
                 "--disable-weights-backuper",
                 action="store_false",
                 dest="enable_weights_backuper",
@@ -173,6 +182,14 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 choices=["raw", "bridge"],
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
+            )
+            parser.add_argument(
+                "--load-hf-with-mbridge",
+                action="store_true",
+                help=(
+                    "Load --load as a HuggingFace checkpoint with MBridge while keeping the raw Megatron model "
+                    "provider. This is useful for models whose torch_dist conversion is not reliable yet."
+                ),
             )
             parser.add_argument(
                 "--custom-model-provider-path",
@@ -1203,6 +1220,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--skip-initial-update-weights",
+                action="store_true",
+                default=False,
+                help=(
+                    "Skip the startup weight sync when actor and rollout engines are "
+                    "known to have loaded the same checkpoint. Intended for memory-"
+                    "constrained debug runs only; later training-loop syncs are unchanged."
+                ),
+            )
+            parser.add_argument(
                 "--save-debug-train-data",
                 type=str,
                 default=None,
@@ -1687,12 +1714,19 @@ def miles_validate_args(args):
         if (
             args.load is None
             or not os.path.exists(args.load)
-            or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+            or (
+                not args.load_hf_with_mbridge
+                and not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+            )
         ):
             args.no_load_optim = True
             args.no_load_rng = True
             args.finetune = True
             args.load = args.ref_load
+        elif args.load_hf_with_mbridge:
+            args.no_load_optim = True
+            args.no_load_rng = True
+            args.finetune = True
             if args.ref_ckpt_step is not None:
                 args.ckpt_step = args.ref_ckpt_step
             args.start_rollout_id = 0

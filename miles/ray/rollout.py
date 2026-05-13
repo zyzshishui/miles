@@ -52,7 +52,8 @@ class RolloutManager:
 
         self.args = args
         self.pg = pg
-        _start_router(args)
+        if not self.args.debug_train_only:
+            _start_router(args)
         # TODO make args immutable
         init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
         init_http_client(args)

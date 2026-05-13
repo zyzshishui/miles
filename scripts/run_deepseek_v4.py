@@ -38,12 +38,16 @@ app = typer.Typer()
 
 _DEFAULT_MODEL_ORG = {
     "DeepSeek-V4-Flash-FP8": "sgl-project",
+    "DeepSeek-V4-Flash-FP8-1layer": "Pinaster",        # local 1-layer prune for constrained smoke testing
+    "DeepSeek-V4-Flash-FP8-1layer-8experts": "local",  # local 1-layer / 8-routed-expert ROCm smoke
     "DeepSeek-V4-Flash-FP8-4layer": "Pinaster",        # 4-layer prune of sgl-project/DeepSeek-V4-Flash-FP8
     "DeepSeek-V4-Pro-FP8": "sgl-project",
 }
 
 _MEGATRON_MODEL_TYPE = {
     "DeepSeek-V4-Flash-FP8": "deepseek-v4-flash",
+    "DeepSeek-V4-Flash-FP8-1layer": "deepseek-v4-flash-1layer",
+    "DeepSeek-V4-Flash-FP8-1layer-8experts": "deepseek-v4-flash-1layer",
     "DeepSeek-V4-Flash-FP8-4layer": "deepseek-v4-flash-4layer",
     "DeepSeek-V4-Pro-FP8": "deepseek-v4-pro",
 }
@@ -58,6 +62,8 @@ class ScriptArgs(U.ExecuteTrainConfig):
     model_org: str = ""  # filled in from _DEFAULT_MODEL_ORG in __post_init__ if empty
     model_name: Literal[
         "DeepSeek-V4-Flash-FP8",
+        "DeepSeek-V4-Flash-FP8-1layer",
+        "DeepSeek-V4-Flash-FP8-1layer-8experts",
         "DeepSeek-V4-Flash-FP8-4layer",
         "DeepSeek-V4-Pro-FP8",
     ] = "DeepSeek-V4-Flash-FP8"
@@ -131,16 +137,23 @@ def _hf_checkpoint_path(args: ScriptArgs) -> str:
     return args.hf_checkpoint or f"{args.model_dir}/{args.model_name}"
 
 
-def _patch_4layer_model_type(args: ScriptArgs):
-    """TMP: patch sglang model type for 4-layer prunes.
+def _is_flash_partial(args: ScriptArgs) -> bool:
+    return args.model_name in {
+        "DeepSeek-V4-Flash-FP8-1layer",
+        "DeepSeek-V4-Flash-FP8-4layer",
+    }
+
+
+def _patch_partial_model_type(args: ScriptArgs):
+    """TMP: patch sglang model type for partial prunes.
 
     HF transformers doesn't know `deepseek_v4` model_type; SGLang only registers
     `deepseek_ref` (via `srt/utils/hf_transformers_utils.py:319,334`). The full
-    Pro/Flash models work because SGLANG_APPLY_CONFIG_BACKUP=auto substitutes
-    a `deepseek_ref` backup config. For 4-layer prunes we keep `=none` so
-    num_hidden_layers stays 4 — but then we need to patch model_type ourselves.
+    Pro/Flash models work because SGLANG_APPLY_CONFIG_BACKUP=auto substitutes a
+    `deepseek_ref` backup config. For partial prunes we keep `=none` so
+    num_hidden_layers stays pruned -- but then we need to patch model_type ourselves.
     """
-    if args.model_name != "DeepSeek-V4-Flash-FP8-4layer":
+    if not _is_flash_partial(args):
         return
     cfg = Path(_hf_checkpoint_path(args)) / "config.json"
     if not cfg.exists():
@@ -152,17 +165,14 @@ def _patch_4layer_model_type(args: ScriptArgs):
 
 
 def _prepare_download(args: ScriptArgs):
-    """Download HF checkpoint + task dataset. Idempotent — huggingface-cli skips existing blobs."""
+    """Download HF checkpoint + task dataset. Idempotent — hf skips existing blobs."""
     U.exec_command(f"mkdir -p {args.model_dir} {args.data_dir}")
     # Only download if the user has NOT supplied a pre-existing checkpoint dir.
     # (prepare_single / train with --hf-checkpoint bypass this.)
     if args.hf_checkpoint is None:
         dest = f"{args.model_dir}/{args.model_name}"
-        U.exec_command(
-            f"huggingface-cli download {args.model_org}/{args.model_name} "
-            f"--local-dir {dest}"
-        )
-    _patch_4layer_model_type(args)
+        U.exec_command(f"hf download {args.model_org}/{args.model_name} --local-dir {dest}")
+    _patch_partial_model_type(args)
     _download_dataset(args)
 
 
@@ -191,13 +201,21 @@ def prepare_single(args: ScriptArgs):
 
 
 def _prepare_spmd(args: ScriptArgs):
-    is_4layer = args.model_name == "DeepSeek-V4-Flash-FP8-4layer"
+    is_partial = _is_flash_partial(args)
     extra_args = "--expert-tensor-parallel-size 1 --context-parallel-size 1 "
-    if args.num_nodes == 1 and is_4layer:
+    if args.num_nodes == 1 and is_partial:
         extra_args += (
             "--tensor-model-parallel-size 1 "
             "--pipeline-model-parallel-size 1 "
             "--expert-model-parallel-size 1 "
+        )
+    elif args.num_nodes == 1 and args.model_name == "DeepSeek-V4-Flash-FP8":
+        extra_args += (
+            "--tensor-model-parallel-size 8 "
+            "--sequence-parallel "
+            "--pipeline-model-parallel-size 1 "
+            "--expert-model-parallel-size 8 "
+            "--make-vocab-size-divisible-by 32 "
         )
     elif args.num_nodes == 7 and args.model_name == "DeepSeek-V4-Flash-FP8":
         extra_args += (
@@ -227,7 +245,7 @@ def _prepare_spmd(args: ScriptArgs):
         )
 
     num_gpus_for_convert = args.num_gpus_per_node
-    if is_4layer:
+    if is_partial:
         num_gpus_for_convert = min(num_gpus_for_convert, 4)
 
     U.convert_checkpoint(
@@ -275,7 +293,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
 
     # Single-node configs (any GPU count)
     if args.num_nodes == 1:
-        return (
+        parallel_config = (
             f"--tensor-model-parallel-size {args.num_gpus_per_node} "
             "--sequence-parallel "
             "--pipeline-model-parallel-size 1 "
@@ -283,6 +301,9 @@ def _get_parallel_config(args: ScriptArgs) -> str:
             f"--expert-model-parallel-size {args.num_gpus_per_node} "
             "--expert-tensor-parallel-size 1 "
         )
+        if args.model_name == "DeepSeek-V4-Flash-FP8":
+            parallel_config += "--make-vocab-size-divisible-by 32 "
+        return parallel_config
 
     # GB300: 4 GPUs/node
     if args.num_gpus_per_node == 4:
@@ -363,7 +384,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
 
 def _train(args: ScriptArgs):
     print(f"running on {args.num_nodes} nodes")
-    _patch_4layer_model_type(args)
+    _patch_partial_model_type(args)
 
     load_save_path = f"{args.save_dir}/{args.run_id}/checkpoints"
     ckpt_args = f"--hf-checkpoint {args.hf_checkpoint} " f"--ref-load {args.model_local_dir}/{args.torch_dist_name} "
@@ -466,17 +487,22 @@ def _train(args: ScriptArgs):
         sglang_dp_size = sglang_world_size
         sglang_ep_size = sglang_world_size
         sglang_a2a_backend = None
+    sglang_page_size = 256
+    sglang_chunked_prefill_size = (
+        2048
+        if args.num_nodes == 1 and args.model_name == "DeepSeek-V4-Flash-FP8"
+        else 8192
+    )
     sglang_args = (
         f"--rollout-num-gpus-per-engine {sglang_world_size} "
         f"--sglang-tp-size {sglang_tp_size} "
         f"--sglang-dp-size {sglang_dp_size} "
         "--sglang-enable-dp-attention "
         "--sglang-attention-backend compressed "
-        "--sglang-page-size 256 "
+        f"--sglang-page-size {sglang_page_size} "
         "--sglang-max-running-requests 64 "
-        "--sglang-chunked-prefill-size 8192 "
+        f"--sglang-chunked-prefill-size {sglang_chunked_prefill_size} "
         "--sglang-server-concurrency 1024 "
-        "--sglang-weight-loader-drop-cache-after-load "
         "--router-health-success-threshold 1 "
         "--router-health-check-interval-secs 15 "
         "--router-health-failure-threshold 40 "  # TODO improve
@@ -499,6 +525,9 @@ def _train(args: ScriptArgs):
         "SGLANG_SKIP_CHECKPOINT_LOAD_CHECK": "1",
         "SGLANG_DSV4_FP4_EXPERTS": "0",
     }
+    if args.model_name.startswith("DeepSeek-V4-Flash-FP8"):
+        extra_env_vars["MILES_DSV4_CKPT_VERSION"] = "0415"
+        extra_env_vars["MEGATRON_USE_KV_QAT"] = "1"
     if args.model_name == "DeepSeek-V4-Flash-FP8-4layer":
         extra_env_vars["SGLANG_APPLY_CONFIG_BACKUP"] = "none"
     if args.model_name == "DeepSeek-V4-Pro-FP8":
@@ -522,8 +551,9 @@ def _train(args: ScriptArgs):
         "--freeze-e-score-correction-bias "
         "--rollout-health-check-interval 300 "
         "--rollout-health-check-timeout 300 "
-        "--colocate "
     )
+    if args.debug_train_run_id is None:
+        misc_args += "--colocate "
 
     if args.dump_details:
         misc_args += f"--dump-details /root/shared_data/{args.run_id}/dump_details "

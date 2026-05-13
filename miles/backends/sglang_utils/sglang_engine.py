@@ -16,6 +16,7 @@ from urllib3.exceptions import NewConnectionError
 from miles.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME, convert_target_modules_to_hf, is_lora_enabled
 from miles.ray.ray_actor import RayActor
 from miles.utils.http_utils import get_host_info
+from miles.utils.transformers_patch import with_transformers_patch
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,16 @@ def get_base_gpu_id(args, rank):
 
 
 def _to_local_gpu_id(physical_gpu_id: int) -> int:
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if not cvd:
+    visible_devices = (
+        os.environ.get("CUDA_VISIBLE_DEVICES")
+        or os.environ.get("HIP_VISIBLE_DEVICES")
+        or os.environ.get("ROCR_VISIBLE_DEVICES")
+    )
+    if not visible_devices:
         return physical_gpu_id  # no remapping
-    # CUDA_VISIBLE_DEVICES can be like "4,5,6,7"
-    visible = [int(x) for x in cvd.split(",") if x.strip() != ""]
+
+    # Visible-device variables can be like "4,5,6,7".
+    visible = [int(x) for x in visible_devices.split(",") if x.strip() != ""]
     # In a remapped process, valid torch device indices are 0..len(visible)-1
     if physical_gpu_id in visible:
         return visible.index(physical_gpu_id)
@@ -46,17 +52,22 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
     if 0 <= physical_gpu_id < len(visible):
         return physical_gpu_id
     raise RuntimeError(
-        f"GPU id {physical_gpu_id} is not valid under CUDA_VISIBLE_DEVICES={cvd}. "
+        f"GPU id {physical_gpu_id} is not valid under visible devices {visible_devices}. "
         f"Expected one of {visible} (physical) or 0..{len(visible)-1} (local)."
     )
 
 
-def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+def _launch_server_with_transformers_patch(server_args: ServerArgs):
     from sglang.srt.entrypoints.http_server import launch_server
 
+    with with_transformers_patch():
+        launch_server(server_args)
+
+
+def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
-    p = multiprocessing.Process(target=launch_server, args=(server_args,))
+    p = multiprocessing.Process(target=_launch_server_with_transformers_patch, args=(server_args,))
     p.start()
 
     if server_args.node_rank != 0:
@@ -181,7 +192,9 @@ class SGLangEngine(RayActor):
 
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
-        self.process = launch_server_process(ServerArgs(**server_args_dict))
+        with with_transformers_patch():
+            server_args = ServerArgs(**server_args_dict)
+        self.process = launch_server_process(server_args)
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_miles_router:
@@ -222,8 +235,9 @@ class SGLangEngine(RayActor):
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            e.add_note(f"{response.text=}")
-            raise
+            raise requests.exceptions.HTTPError(
+                f"{e}; response.text={response.text}", response=response
+            ) from e
         return response.json()
 
     def health_generate(self, timeout: float = 5.0) -> bool:
@@ -545,6 +559,7 @@ def _compute_server_args(
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
         # always enable draft weights cpu backup so that we run training without mtp weights.
+        "enable_weights_cpu_backup": args.offload_rollout,
         "enable_draft_weights_cpu_backup": True,
     }
 

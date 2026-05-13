@@ -84,10 +84,8 @@ class MegatronTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
 
         if args.offload_train:
-            if (x := args.train_memory_margin_bytes) > 0:
-                # --train-memory-margin-bytes can tune this
-                logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-                torch_memory_saver.memory_margin_bytes = x
+            logger.info("Disable torch_memory_saver.memory_margin_bytes during model initialization")
+            torch_memory_saver.memory_margin_bytes = 0
 
         if self.args.debug_rollout_only:
             self.parallel_state = create_megatron_parallel_state(model=None)
@@ -109,6 +107,12 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         print_memory("after initialize_model_and_optimizer")
 
+        if args.offload_train and (x := args.train_memory_margin_bytes) > 0:
+            # --train-memory-margin-bytes protects runtime allocations; applying it
+            # during construction can reject legitimate one-time model/checkpoint buffers.
+            logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x} after model initialization")
+            torch_memory_saver.memory_margin_bytes = x
+
         self.parallel_state = create_megatron_parallel_state(model=self.model)
 
         if role == "critic":
@@ -117,6 +121,25 @@ class MegatronTrainRayActor(TrainRayActor):
             return
 
         start_rollout_id = loaded_rollout_id + 1
+
+        self.rollout_engines = None
+        self.rollout_data_postprocess = None
+        if self.args.rollout_data_postprocess_path is not None:
+            from miles.utils.misc import load_function
+
+            self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
+
+        self._uses_weight_backuper = not (
+            self.args.skip_train or (self.args.debug_train_only and not with_ref and not self.args.keep_old_actor)
+        )
+
+        if not self._uses_weight_backuper:
+            if self.args.vocab_size is None:
+                self.args.vocab_size = self.tokenizer.vocab_size
+            self._active_model_tag = "actor"
+            clear_memory()
+            self.prof.on_init_end()
+            return start_rollout_id
 
         self.weights_backuper = TensorBackuper.create(
             source_getter=lambda: named_params_and_buffers(
@@ -160,14 +183,6 @@ class MegatronTrainRayActor(TrainRayActor):
             # recover to actor in the end.
             self._switch_model("actor")
             self.sleep()
-
-        self.rollout_engines = None
-
-        self.rollout_data_postprocess = None
-        if self.args.rollout_data_postprocess_path is not None:
-            from miles.utils.misc import load_function
-
-            self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
 
         self.prof.on_init_end()
 
@@ -267,8 +282,9 @@ class MegatronTrainRayActor(TrainRayActor):
                         slice_with_cp(r, pad_func, self.parallel_state, qkv_format, max_seqlen) for r in replay_data
                     ]
                 replay_data = torch.stack(replay_data, dim=0)
-                batch_size, seqlen, num_layers, topk = replay_data.shape
-                replay_data = replay_data.reshape(batch_size * seqlen, num_layers, topk)
+                if if_sp_region:
+                    batch_size, seqlen, num_layers, topk = replay_data.shape
+                    replay_data = replay_data.reshape(batch_size * seqlen, num_layers, topk)
             else:
                 pad_size = self.parallel_state.dp_size * self.args.data_pad_size_multiplier
                 if self.args.allgather_cp and cp_size > 1:
@@ -383,7 +399,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with inverse_timer("train_wait"), timer("train"):
             if self.args.compute_advantages_and_returns:
-                if "ref" in self.weights_backuper.backup_tags:
+                if self._uses_weight_backuper and "ref" in self.weights_backuper.backup_tags:
                     self._set_replay_stage("fallthrough")
                     self._switch_model("ref")
                     rollout_data.update(
@@ -393,7 +409,8 @@ class MegatronTrainRayActor(TrainRayActor):
                             store_prefix="ref_",
                         )
                     )
-                self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
+                if self._uses_weight_backuper:
+                    self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
                 if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
                     for m in all_replay_managers:
                         if m.enabled:
@@ -418,7 +435,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         rollout_data,
                         self._actor_critic_groups,
                     )
-                if self._active_model_tag != "actor":
+                if self._uses_weight_backuper and self._active_model_tag != "actor":
                     self._switch_model("actor")
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
@@ -429,6 +446,11 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.rollout_data_postprocess(self.args)
 
             log_rollout_data(rollout_id, self.args, rollout_data, self.parallel_state)
+            train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+
+            if self.args.skip_train:
+                logger.info("Skipping actor train step because --skip-train is set")
+                return
 
             # Train
             self._set_replay_stage("replay_backward")
@@ -452,11 +474,13 @@ class MegatronTrainRayActor(TrainRayActor):
                 m.clear_all()
 
         # update the cpu actor weight to the latest model
-        self.weights_backuper.backup("actor")
+        if self._uses_weight_backuper:
+            self.weights_backuper.backup("actor")
 
         # Update ref model if needed
         if (
-            self.args.ref_update_interval is not None
+            self._uses_weight_backuper
+            and self.args.ref_update_interval is not None
             and (rollout_id + 1) % self.args.ref_update_interval == 0
             and "ref" in self.weights_backuper.backup_tags
         ):

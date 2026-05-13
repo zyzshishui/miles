@@ -23,6 +23,29 @@ from miles.utils.replay_base import routing_replay_manager
 logger = logging.getLogger(__name__)
 
 
+def _disable_rocm_dsv4_embedding_reduce_scatter(model: GPTModel, args: argparse.Namespace) -> None:
+    if not torch.version.hip:
+        return
+    if getattr(args, "experimental_attention_variant", None) != "dsv4":
+        return
+
+    embedding = getattr(model, "embedding", None)
+    word_embeddings = getattr(embedding, "word_embeddings", None)
+    if embedding is None or word_embeddings is None:
+        return
+    if not getattr(embedding, "reduce_scatter_embeddings", False) and not getattr(
+        word_embeddings, "reduce_scatter_embeddings", False
+    ):
+        return
+
+    logger.warning(
+        "Disabling DeepSeek V4 embedding reduce-scatter on ROCm; "
+        "using vocab all-reduce followed by sequence-parallel scatter."
+    )
+    embedding.reduce_scatter_embeddings = False
+    word_embeddings.reduce_scatter_embeddings = False
+
+
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
 class LinearForLastLayer(torch.nn.Linear):
     def __init__(
@@ -107,7 +130,9 @@ def get_model_provider_func(
             pg_collection=None,
         ) -> GPTModel:
             assert config is None, "miles builds the config from args, so it expects config to be None"
-            return provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            model = provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            _disable_rocm_dsv4_embedding_reduce_scatter(model, args)
+            return model
 
         return wrapped_bridge_provider
 
@@ -228,6 +253,8 @@ def get_model_provider_func(
 
         with build_model_context(**build_model_context_args):
             model = GPTModel(**kwargs)
+
+        _disable_rocm_dsv4_embedding_reduce_scatter(model, args)
 
         if post_process and role == "critic":
             model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)

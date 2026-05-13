@@ -18,11 +18,24 @@ logger = logging.getLogger(__name__)
 
 
 def get_local_gpu_id():
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
-    if cvd is None:
-        return ray.get_gpu_ids()[0]
-    else:
-        return cvd.split(",").index(str(ray.get_gpu_ids()[0]))
+    ray_gpu_id = int(ray.get_gpu_ids()[0])
+    visible_devices = (
+        os.environ.get("CUDA_VISIBLE_DEVICES")
+        or os.environ.get("HIP_VISIBLE_DEVICES")
+        or os.environ.get("ROCR_VISIBLE_DEVICES")
+    )
+    if not visible_devices:
+        return ray_gpu_id
+
+    visible = [int(x) for x in visible_devices.split(",") if x.strip() != ""]
+    if ray_gpu_id in visible:
+        return visible.index(ray_gpu_id)
+    if 0 <= ray_gpu_id < len(visible):
+        return ray_gpu_id
+    raise RuntimeError(
+        f"GPU id {ray_gpu_id} is not valid under visible devices {visible_devices}. "
+        f"Expected one of {visible} (physical) or 0..{len(visible)-1} (local)."
+    )
 
 
 class TrainRayActor(RayActor):

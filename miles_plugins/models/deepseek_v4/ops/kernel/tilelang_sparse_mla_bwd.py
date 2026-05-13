@@ -116,7 +116,8 @@ def bwd(
     attn_sink_shape = [H]
 
     padded_H = max(tilelang.math.next_power_of_2(H), 16)
-    block_H = min(64, padded_H)
+    max_block_H = 32 if torch.version.hip is not None and padded_H >= 64 else 64
+    block_H = min(max_block_H, padded_H)
     assert padded_H % block_H == 0
     NH = padded_H // block_H
     BS = block_size

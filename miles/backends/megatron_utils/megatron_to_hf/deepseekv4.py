@@ -1,18 +1,22 @@
+import os
 import re
 
 import torch
 
 
+def _should_apply_ape_hotfix_mirror():
+    return (
+        os.getenv("SGLANG_DSV4_MODE", "2604") != "2604"
+        and os.getenv("SGLANG_ENABLE_APE_HOTFIX", "1").lower() in ("1", "true")
+    )
+
+
 def _apply_ape_hotfix_mirror(param):
-    # Mirror SGLang Compressor.apply_ape_hotfix for the 0415 checkpoint so that the
-    # Megatron -> SGLang weight update lands in kernel layout. Logic: chunk ape on
-    # the last dim (== ``2 * head_dim``), concat the two halves on dim 0, then view
-    # back to ``(ratio=4, head_dim)``. Matches SGLang's default for ``ratio == 4``
-    # under ``SGLANG_DSV4_MODE=2604`` (default) + ``SGLANG_OPT_FIX_APE_2604=True``
-    # (default).
+    # Mirror SGLang Compressor.apply_ape_hotfix. The default 2604 path marks APE
+    # converted without reordering data, so this is only for non-2604 checkpoints.
     assert param.shape[0] == 4
     ape = torch.chunk(param, 2, dim=-1)
-    return torch.cat([ape[0], ape[1]], dim=0).view(4, -1).contiguous()
+    return torch.cat([ape[1], ape[0]], dim=-1).view_as(param).contiguous()
 
 
 def convert_deepseekv4_to_hf(args, name, param):
@@ -96,7 +100,7 @@ def convert_deepseekv4_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.self_attn.attn_sink", param)]
 
         elif rest == "self_attention.compressor.ape":
-            if param.shape[0] == 4:
+            if param.shape[0] == 4 and _should_apply_ape_hotfix_mirror():
                 param = _apply_ape_hotfix_mirror(param)
             return [(f"model.layers.{layer_idx}.self_attn.compressor.ape", param)]
         elif rest == "self_attention.compressor.wkv.weight":
@@ -118,7 +122,7 @@ def convert_deepseekv4_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.self_attn.indexer.weights_proj.weight", param)]
 
         elif rest == "self_attention.indexer.compressor.ape":
-            if param.shape[0] == 4:
+            if param.shape[0] == 4 and _should_apply_ape_hotfix_mirror():
                 param = _apply_ape_hotfix_mirror(param)
             return [(f"model.layers.{layer_idx}.self_attn.indexer.compressor.ape", param)]
         elif rest == "self_attention.indexer.compressor.wkv.weight":

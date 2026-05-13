@@ -1,6 +1,7 @@
 import os
 
 import ray
+import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
@@ -50,14 +51,24 @@ class RayTrainGroup:
         assert pg is not None
         pg, reordered_bundle_indices, _reordered_gpu_ids = pg
 
+        noset_visible_devices_env_vars = NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
+        if torch.version.hip is not None:
+            noset_visible_devices_env_vars = [
+                name
+                for name in noset_visible_devices_env_vars
+                if name != "RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES"
+            ]
+
         env_vars = {
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
             # we need also set it to 0 to prevent nccl error.
             "NCCL_CUMEM_ENABLE": os.environ.get("NCCL_CUMEM_ENABLE", "0"),
             "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
-            **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
+            **{name: "1" for name in noset_visible_devices_env_vars},
             **self.args.train_env_vars,
         }
+        if torch.version.hip is not None:
+            env_vars["RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES"] = ""
 
         if self.args.offload_train and self.args.train_backend == "megatron":
             import torch_memory_saver

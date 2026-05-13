@@ -18,6 +18,7 @@ from miles.backends.megatron_utils.initialize import init
 from miles.backends.megatron_utils.model_provider import get_model_provider_func
 from miles.utils.logging_utils import configure_logger
 from miles.utils.memory_utils import print_memory
+from miles.utils.rocm_distributed import patch_rocm_scatter_with_broadcast
 from miles.utils.transformers_patch import with_transformers_patch
 
 
@@ -37,6 +38,25 @@ def patch_weight_to_mcore_format_preserve_fp32():
 
     Bridge._weight_to_mcore_format = patched_method
     print("[Patch] Applied patch to preserve FP32 precision in _weight_to_mcore_format")
+
+
+def patch_mbridge_safetensor_current_device():
+    def _current_device_name() -> str:
+        if torch.cuda.is_available():
+            return f"cuda:{torch.cuda.current_device()}"
+        return "cpu"
+
+    import mbridge.utils.device as device_module
+
+    device_module.get_device_name = _current_device_name
+    try:
+        import mbridge.models.ext.deepseek_v3.dequant_fp8_safetensor_io as dequant_io_module
+
+        dequant_io_module.get_device_name = _current_device_name
+    except ImportError:
+        pass
+
+    print("[Patch] Applied patch to load MBridge safetensors on the current CUDA device")
 
 
 def add_convertion_args(parser):
@@ -123,7 +143,6 @@ def main():
         backend="nccl",
         world_size=world_size,
         rank=global_rank,
-        device_id=torch.device(f"cuda:{local_rank}"),
     )
     args = get_args()
     with with_transformers_patch():
@@ -134,10 +153,12 @@ def main():
         hf_model_path = args.hf_checkpoint
         bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
 
-    # Patch to preserve FP32 precision for _keep_fp32 params
-    patch_weight_to_mcore_format_preserve_fp32()
+        # Patch to preserve FP32 precision for _keep_fp32 params
+        patch_weight_to_mcore_format_preserve_fp32()
+        patch_mbridge_safetensor_current_device()
+        patch_rocm_scatter_with_broadcast()
 
-    bridge.load_weights(model, hf_model_path, memory_efficient=True)
+        bridge.load_weights(model, hf_model_path, memory_efficient=True)
     print(f"Model loaded: {hf_model_path}")
 
     print_memory("after loading model")

@@ -33,7 +33,10 @@ class MilesRouter:
         self.verbose = verbose
 
         self.app = FastAPI()
-        self.app.add_event_handler("startup", self._start_background_health_check)
+        if hasattr(self.app, "add_event_handler"):
+            self.app.add_event_handler("startup", self._start_background_health_check)
+        else:
+            self.app.on_event("startup")(self._start_background_health_check)
 
         # URL -> Active Request Count (load state)
         self.worker_request_counts: dict[str, int] = {}

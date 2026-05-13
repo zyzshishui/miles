@@ -16,6 +16,7 @@ from miles.utils.distributed_utils import get_gloo_group
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
 from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
+    _needs_post_process_after_update,
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     post_process_weights,
@@ -154,10 +155,7 @@ class UpdateWeightFromTensor:
 
         # int4/fp4 post_process, mxfp8 post-process (swizzle MoE scales).
         if rank == 0:
-            if self.quantization_config and self.quantization_config["quant_method"] in [
-                "compressed-tensors",
-                "mxfp8",
-            ]:
+            if not self.is_lora and _needs_post_process_after_update(self.model_name, self.quantization_config):
                 post_process_weights(
                     restore_weights_before_load=False,
                     post_process_quantization=True,

@@ -117,7 +117,14 @@ def setup_model_and_optimizer(
     if is_lora_enabled(args) and role == "actor" and args.megatron_to_hf_mode == "bridge":
         model = _setup_lora_model_via_bridge(args)
     else:
-        model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
+        model = get_model(
+            get_model_provider_func(args, role),
+            ModelType.encoder_or_decoder,
+            wrap_with_ddp=not args.skip_train,
+        )
+
+    if args.skip_train:
+        return model, None, None
 
     # Optimizer
     kwargs = {}
@@ -803,6 +810,7 @@ def initialize_model_and_optimizer(
 
     check_model_hashes(args, model, iteration)
 
-    opt_param_scheduler.step(increment=iteration * args.global_batch_size)
+    if opt_param_scheduler is not None:
+        opt_param_scheduler.step(increment=iteration * args.global_batch_size)
 
     return model, optimizer, opt_param_scheduler, iteration

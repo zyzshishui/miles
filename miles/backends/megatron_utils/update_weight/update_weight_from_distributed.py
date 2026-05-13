@@ -17,6 +17,21 @@ from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
 
 
+def _needs_post_process_after_update(
+    model_name: str,
+    quantization_config: dict[str, int | str | list[str]] | None,
+) -> bool:
+    if quantization_config and quantization_config["quant_method"] in [
+        "compressed-tensors",
+        "mxfp8",
+    ]:
+        return True
+
+    # DeepSeek-V4 on ROCm can use post-load kernel layouts even without an HF
+    # quantization config, e.g. AITER MoE shuffles unquantized expert weights.
+    return model_name == "deepseekv4"
+
+
 class UpdateWeightFromDistributed:
     """
     Update distributed engines via NCCL. Each PP rank: group "miles-pp_{pp_rank}",
@@ -40,6 +55,7 @@ class UpdateWeightFromDistributed:
         self.model = model
         self.model_name = model_name
         self.quantization_config = quantization_config
+        self.is_lora = is_lora
         self.weight_version = 0
         self._model_update_groups = None
 
@@ -123,10 +139,7 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
             # int4/fp4 post_process, mxfp8 post-process (swizzle MoE scales).
-            if self.quantization_config and self.quantization_config["quant_method"] in [
-                "compressed-tensors",
-                "mxfp8",
-            ]:
+            if not self.is_lora and _needs_post_process_after_update(self.model_name, self.quantization_config):
                 post_process_weights(
                     restore_weights_before_load=False,
                     post_process_quantization=True,

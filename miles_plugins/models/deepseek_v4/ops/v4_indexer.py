@@ -113,7 +113,7 @@ class V4Indexer(MegatronModule):
 
         q = rotate_activation(q)
         if os.environ.get("MEGATRON_USE_KV_QAT", "0") == "1":
-            q = fp8_simulate_qat(q, block_size=128)
+            q = fp8_simulate_qat(q, 128)
 
         k = self.compressor(x)
 

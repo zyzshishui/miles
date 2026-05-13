@@ -1,6 +1,6 @@
 import logging
 from contextlib import contextmanager
-from sglang.srt.utils.hf_transformers_utils import _load_deepseek_temp_model
+from sglang.srt.utils.hf_transformers.common import _load_deepseek_v4_model
 
 
 logger = logging.getLogger(__name__)
@@ -32,12 +32,7 @@ def apply_transformers_patch():
 
         config_dict, _ = PretrainedConfig.get_config_dict(pretrained_model_name_or_path, **kwargs)
         if config_dict.get("model_type") in ("deepseek_v4", "deepseek_ref"):
-            return _load_deepseek_temp_model(
-                pretrained_model_name_or_path,
-                model_type="deepseek_ref",
-                architecture="DeepseekV4ForCausalLM",
-                **kwargs,
-            )
+            return _load_deepseek_v4_model(pretrained_model_name_or_path, **kwargs)
 
         return _original_from_pretrained.__func__(cls, pretrained_model_name_or_path, **kwargs)
 

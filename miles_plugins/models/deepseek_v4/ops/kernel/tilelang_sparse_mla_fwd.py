@@ -73,8 +73,6 @@ def sparse_mqa_fwd(
         with T.Kernel(seq_len * REPLICATE_H, batch, threads=threads) as (bx, by):
             Q_shared = T.alloc_shared([H_per_block, D], dtype)
             KV_shared = T.alloc_shared([BI, D], dtype)
-            O_shared = T.alloc_shared([H_per_block, D], dtype)
-            Lse_shared = T.alloc_shared([H_per_block], accum_dtype)
             mask = T.alloc_fragment([BI], "bool")
 
             acc_o = T.alloc_fragment([H_per_block, D], accum_dtype)
@@ -168,6 +166,8 @@ def sparse_mqa_fwd_interface(q, kv, attn_sink, topk_idxs, sm_scale=None, block_I
     _, seq_len_kv, kv_dim = kv.shape
     assert kv_dim == dim
     _, _, topk = topk_idxs.shape
+    if torch.version.hip is not None and heads >= 64 and num_stages > 1:
+        num_stages = 1
 
     # Pad topk to next multiple of block_I (kernel requires divisibility)
     padded_topk = (topk + block_I - 1) // block_I * block_I
