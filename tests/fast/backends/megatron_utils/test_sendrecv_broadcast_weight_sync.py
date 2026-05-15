@@ -41,21 +41,19 @@ class FakeLock:
         self.release = FakeRemoteMethod(True)
 
 
-class FakeRemoteTask:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
-
-    def remote(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.result
+class FakeCoordinator:
+    def __init__(self):
+        self.configure = FakeRemoteMethod(None)
+        self.add_relay_update_refs = FakeRemoteMethod("coordinator-submit-ref")
+        self.mark_source_done = FakeRemoteMethod({"scheduled": True, "transfers": 0})
+        self.wait_pending_fanout = FakeRemoteMethod({"next_fanout_port": 20003})
 
 
 def _new_updater():
     updater = UpdateWeightSendRecvBroadcast.__new__(UpdateWeightSendRecvBroadcast)
     updater.args = SimpleNamespace(sglang_pp_size=1)
     updater._pp_rank = 0
-    updater._pending_relay_update_records = []
+    updater._pending_coordinator_submit_refs = []
     return updater
 
 
@@ -80,13 +78,14 @@ def test_validate_relay_fanout_requires_homogeneous_engine_gpu_counts():
         updater._validate_relay_fanout_layout([object(), object()], [4, 2])
 
 
-def test_fanout_initializes_ranked_send_groups_and_uses_p2p_sendrecv(monkeypatch):
+def test_fanout_initializes_one_ranked_send_group_and_uses_p2p_sendrecv(monkeypatch):
     monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
     updater = _new_updater()
     relay = FakeEngine()
-    peer = FakeEngine()
+    peer0 = FakeEngine()
+    peer1 = FakeEngine()
     updater._relay_engine = relay
-    updater._peer_engines = [peer]
+    updater._peer_engines = [peer0, peer1]
     updater._relay_gpu_count = 2
     updater._next_fanout_port = 20000
     updater.weight_version = 7
@@ -95,19 +94,31 @@ def test_fanout_initializes_ranked_send_groups_and_uses_p2p_sendrecv(monkeypatch
     updater._fanout_relay_weights_to_peer_instances()
 
     _, relay_init_kwargs = relay.init_weights_send_group_for_remote_instance.calls[0]
-    _, peer_init_kwargs = peer.init_weights_send_group_for_remote_instance.calls[0]
+    _, peer0_init_kwargs = peer0.init_weights_send_group_for_remote_instance.calls[0]
+    _, peer1_init_kwargs = peer1.init_weights_send_group_for_remote_instance.calls[0]
     assert relay_init_kwargs["group_rank"] == 0
-    assert peer_init_kwargs["group_rank"] == 1
-    assert relay_init_kwargs["world_size"] == peer_init_kwargs["world_size"] == 2
-    assert relay_init_kwargs["ports"] == peer_init_kwargs["ports"] == "23456,23457"
-    assert relay_init_kwargs["group_name"] == peer_init_kwargs["group_name"]
+    assert peer0_init_kwargs["group_rank"] == 1
+    assert peer1_init_kwargs["group_rank"] == 2
+    assert (
+        relay_init_kwargs["world_size"]
+        == peer0_init_kwargs["world_size"]
+        == peer1_init_kwargs["world_size"]
+        == 3
+    )
+    assert relay_init_kwargs["ports"] == peer0_init_kwargs["ports"] == peer1_init_kwargs["ports"] == "23456,23457"
+    assert relay_init_kwargs["group_name"] == peer0_init_kwargs["group_name"] == peer1_init_kwargs["group_name"]
+    assert len(relay._get_current_node_ip_and_free_port.calls) == 1
     assert len(relay.send_weights_to_remote_instance.calls) == 0
-    assert len(peer.send_weights_to_remote_instance.calls) == 0
+    assert len(peer0.send_weights_to_remote_instance.calls) == 0
+    assert len(peer1.send_weights_to_remote_instance.calls) == 0
     assert len(relay.send_recv_weights_to_remote_instance.calls) == 1
-    assert len(peer.send_recv_weights_to_remote_instance.calls) == 1
+    assert len(peer0.send_recv_weights_to_remote_instance.calls) == 1
+    assert len(peer1.send_recv_weights_to_remote_instance.calls) == 1
+    assert len(updater.rollout_engine_lock.release.calls) == 1
 
 
 def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
     monkeypatch.setattr(mixin, "get_parallel_state", _source_parallel_state)
     helper_calls = []
 
@@ -143,6 +154,7 @@ def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):
     updater._group_name = "miles-sendrecv-broadcast-train-pp_0"
     updater._bucket_id = 0
     updater.weight_version = 3
+    updater._coordinator = FakeCoordinator()
 
     tensor = torch.ones(2, dtype=torch.float32)
     tensors = [("model.layers.0.weight", tensor)]
@@ -158,50 +170,148 @@ def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):
     assert len(sent_tensors) == 1
     assert sent_tensors[0][0] == "model.layers.0.weight"
     assert sent_tensors[0][1] is tensor
-    assert updater._pending_relay_update_records == [
-        (0, 0, ["relay-update-ref"])
-    ]
+    assert updater._pending_coordinator_submit_refs == ["coordinator-submit-ref"]
+    _, submit_kwargs = updater._coordinator.add_relay_update_refs.calls[0]
+    assert submit_kwargs == {
+        "weight_version": 3,
+        "pp_rank": 0,
+        "bucket_id": 0,
+        "update_refs": ["relay-update-ref"],
+    }
+    assert len(updater.rollout_engine_lock.acquire.calls) == 1
+    assert len(updater.rollout_engine_lock.release.calls) == 1
 
 
-def test_finalize_schedules_background_fanout(monkeypatch):
-    monkeypatch.setattr(sendrecv_broadcast.dist, "get_rank", lambda: 0)
-    monkeypatch.setattr(sendrecv_broadcast, "get_gloo_group", lambda: "gloo")
-    monkeypatch.setattr(sendrecv_broadcast.dist, "get_world_size", lambda group: 1)
+def test_update_bucket_releases_lock_when_nccl_send_fails(monkeypatch):
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
+    monkeypatch.setattr(mixin, "get_parallel_state", _source_parallel_state)
+
+    def fail_update_weights_from_distributed(*args, **kwargs):
+        raise RuntimeError("nccl failed")
+
     monkeypatch.setattr(
-        sendrecv_broadcast.dist,
-        "all_gather_object",
-        lambda output, obj, group: output.__setitem__(0, obj),
+        sendrecv_broadcast,
+        "update_weights_from_distributed",
+        fail_update_weights_from_distributed,
     )
-    fanout_task = FakeRemoteTask({"next_fanout_port": 20003})
-    monkeypatch.setattr(sendrecv_broadcast, "_run_relay_fanout_and_resume", fanout_task)
 
     updater = _new_updater()
-    relay = FakeEngine()
-    peer = FakeEngine()
-    updater.rollout_engines = [relay, peer]
+    updater._relay_engine = FakeEngine()
+    updater._relay_update_group = "relay-nccl-group"
     updater.rollout_engine_lock = FakeLock()
-    updater._relay_engine = relay
-    updater._peer_engines = [peer]
+    updater._group_name = "miles-sendrecv-broadcast-train-pp_0"
+    updater._bucket_id = 0
+
+    with pytest.raises(RuntimeError, match="nccl failed"):
+        updater._update_weight_implementation([("weight", torch.ones(1))])
+
+    assert len(updater.rollout_engine_lock.release.calls) == 1
+
+
+def test_connect_coordinator_rank_zero_keeps_created_actor_handle_and_configures_it(monkeypatch):
+    class FakeCoordinatorActor:
+        options_kwargs = None
+
+        @classmethod
+        def options(cls, **kwargs):
+            cls.options_kwargs = kwargs
+            return cls()
+
+        def remote(self):
+            return FakeCoordinator()
+
+    barriers = []
+    monkeypatch.setattr(sendrecv_broadcast, "_coordinator_actor_name", lambda: "coordinator")
+    monkeypatch.setattr(sendrecv_broadcast.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(sendrecv_broadcast, "get_gloo_group", lambda: "gloo")
+    monkeypatch.setattr(sendrecv_broadcast.dist, "barrier", lambda group: barriers.append(group))
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
+    monkeypatch.setattr(
+        sendrecv_broadcast.ray,
+        "get_actor",
+        lambda name: (_ for _ in ()).throw(ValueError(name)),
+    )
+    monkeypatch.setattr(sendrecv_broadcast, "_SendRecvBroadcastCoordinator", FakeCoordinatorActor)
+    monkeypatch.setattr(
+        sendrecv_broadcast,
+        "get_parallel_state",
+        lambda: SimpleNamespace(pp=SimpleNamespace(size=2)),
+    )
+
+    updater = _new_updater()
+    updater.rollout_engines = [FakeEngine(), FakeEngine()]
+    updater.rollout_engine_lock = FakeLock()
+    updater._relay_engine = updater.rollout_engines[0]
+    updater._peer_engines = [updater.rollout_engines[1]]
     updater._relay_gpu_count = 2
     updater._next_fanout_port = 20000
+
+    updater._connect_coordinator()
+
+    assert isinstance(updater._coordinator, FakeCoordinator)
+    assert len(updater._coordinator.configure.calls) == 1
+    _, configure_kwargs = updater._coordinator.configure.calls[0]
+    assert configure_kwargs["expected_sources"] == 2
+    assert configure_kwargs["rollout_engines"] == updater.rollout_engines
+    assert configure_kwargs["rollout_engine_lock"] == updater.rollout_engine_lock
+    assert configure_kwargs["relay_engine"] == updater._relay_engine
+    assert configure_kwargs["peer_engines"] == updater._peer_engines
+    assert configure_kwargs["relay_gpu_count"] == 2
+    assert configure_kwargs["next_fanout_port"] == 20000
+    assert FakeCoordinatorActor.options_kwargs == {"name": "coordinator"}
+    assert barriers == ["gloo"]
+
+
+def test_connect_coordinator_refreshes_existing_actor_handles(monkeypatch):
+    existing_coordinator = FakeCoordinator()
+    barriers = []
+    monkeypatch.setattr(sendrecv_broadcast, "_coordinator_actor_name", lambda: "coordinator")
+    monkeypatch.setattr(sendrecv_broadcast.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(sendrecv_broadcast, "get_gloo_group", lambda: "gloo")
+    monkeypatch.setattr(sendrecv_broadcast.dist, "barrier", lambda group: barriers.append(group))
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get_actor", lambda name: existing_coordinator)
+    monkeypatch.setattr(
+        sendrecv_broadcast,
+        "get_parallel_state",
+        lambda: SimpleNamespace(pp=SimpleNamespace(size=2)),
+    )
+
+    updater = _new_updater()
+    updater.rollout_engines = [FakeEngine(), FakeEngine(), FakeEngine()]
+    updater.rollout_engine_lock = FakeLock()
+    updater._relay_engine = updater.rollout_engines[0]
+    updater._peer_engines = list(updater.rollout_engines[1:])
+    updater._relay_gpu_count = 4
+    updater._next_fanout_port = 20009
+
+    updater._connect_coordinator()
+
+    assert updater._coordinator is existing_coordinator
+    assert len(existing_coordinator.configure.calls) == 1
+    _, configure_kwargs = existing_coordinator.configure.calls[0]
+    assert configure_kwargs["rollout_engines"] == updater.rollout_engines
+    assert configure_kwargs["relay_engine"] == updater._relay_engine
+    assert configure_kwargs["peer_engines"] == updater._peer_engines
+    assert configure_kwargs["relay_gpu_count"] == 4
+    assert configure_kwargs["next_fanout_port"] == 20009
+    assert barriers == ["gloo"]
+
+
+def test_finalize_notifies_coordinator_after_submitting_bucket_refs(monkeypatch):
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
+    monkeypatch.setattr(mixin, "get_parallel_state", _source_parallel_state)
+
+    updater = _new_updater()
+    updater._coordinator = FakeCoordinator()
     updater.weight_version = 9
-    updater._pending_fanout_ref = None
-    updater._pending_relay_update_records = [
-        (0, 1, ["pp0-bucket1-ref"]),
-        (0, 0, ["pp0-bucket0-ref"]),
-    ]
+    updater._pending_coordinator_submit_refs = ["submit-0", "submit-1"]
 
     updater._finalize_and_resume_engines()
 
-    assert updater._pending_fanout_ref == {"next_fanout_port": 20003}
-    assert fanout_task.calls[0]["relay_engine"] is relay
-    assert fanout_task.calls[0]["peer_engines"] == [peer]
-    assert fanout_task.calls[0]["weight_version"] == 9
-    assert fanout_task.calls[0]["relay_update_refs"] == [
-        "pp0-bucket0-ref",
-        "pp0-bucket1-ref",
-    ]
-    assert updater._pending_relay_update_records == []
+    assert updater._pending_coordinator_submit_refs == []
+    _, done_kwargs = updater._coordinator.mark_source_done.calls[0]
+    assert done_kwargs == {"weight_version": 9, "pp_rank": 0}
 
 
 def test_wait_pending_fanout_collects_result_and_syncs_errors(monkeypatch):
@@ -218,12 +328,11 @@ def test_wait_pending_fanout_collects_result_and_syncs_errors(monkeypatch):
     monkeypatch.setattr(sendrecv_broadcast.dist, "all_gather_object", fake_all_gather_object)
 
     updater = _new_updater()
-    updater._pending_fanout_ref = {"next_fanout_port": 20003}
+    updater._coordinator = FakeCoordinator()
     updater._next_fanout_port = 20000
 
     updater.wait_pending_fanout()
 
-    assert updater._pending_fanout_ref is None
     assert updater._next_fanout_port == 20003
     assert gathered_errors == [(None, "gloo")]
 
@@ -243,7 +352,7 @@ def test_wait_pending_fanout_propagates_rank_zero_failure(monkeypatch):
     )
 
     updater = _new_updater()
-    updater._pending_fanout_ref = object()
+    updater._coordinator = FakeCoordinator()
 
     with pytest.raises(RuntimeError, match="fanout exploded"):
         updater.wait_pending_fanout()

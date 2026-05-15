@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 _PROFILE_PREFIX = "MILES_WEIGHT_SYNC_PROFILE"
 
 
+def _coordinator_actor_name() -> str:
+    job_id = ray.get_runtime_context().get_job_id()
+    return f"miles-sendrecv-broadcast-coordinator-{job_id}"
+
+
 def _profile_duration(stage: str, start_time: float, **fields) -> None:
     elapsed = time.perf_counter() - start_time
     details = " ".join(f"{key}={value}" for key, value in fields.items())
@@ -108,6 +113,89 @@ def _run_relay_fanout_and_resume(
     return {"next_fanout_port": next_fanout_port}
 
 
+@ray.remote(num_cpus=0)
+class _SendRecvBroadcastCoordinator:
+    def __init__(self) -> None:
+        self._records_by_version: dict[int, list[tuple[int, int, list[ray.ObjectRef]]]] = {}
+        self._done_sources_by_version: dict[int, set[int]] = {}
+        self._pending_fanout_ref: ray.ObjectRef | None = None
+
+    def configure(
+        self,
+        *,
+        expected_sources: int,
+        rollout_engines: Sequence[ActorHandle],
+        rollout_engine_lock: ActorHandle,
+        relay_engine: ActorHandle,
+        peer_engines: Sequence[ActorHandle],
+        relay_gpu_count: int,
+        next_fanout_port: int,
+    ) -> None:
+        if self._pending_fanout_ref is not None:
+            raise RuntimeError("Cannot reconfigure sendrecv_broadcast while fanout is pending.")
+        if self._records_by_version or self._done_sources_by_version:
+            raise RuntimeError("Cannot reconfigure sendrecv_broadcast while update records are pending.")
+
+        self._expected_sources = expected_sources
+        self._rollout_engines = rollout_engines
+        self._rollout_engine_lock = rollout_engine_lock
+        self._relay_engine = relay_engine
+        self._peer_engines = peer_engines
+        self._relay_gpu_count = relay_gpu_count
+        self._next_fanout_port = next_fanout_port
+
+    def add_relay_update_refs(
+        self,
+        *,
+        weight_version: int,
+        pp_rank: int,
+        bucket_id: int,
+        update_refs: Sequence[ray.ObjectRef],
+    ) -> None:
+        self._records_by_version.setdefault(weight_version, []).append(
+            (pp_rank, bucket_id, list(update_refs))
+        )
+
+    def mark_source_done(self, *, weight_version: int, pp_rank: int) -> dict[str, int | bool]:
+        done_sources = self._done_sources_by_version.setdefault(weight_version, set())
+        done_sources.add(pp_rank)
+        if len(done_sources) != self._expected_sources:
+            return {"scheduled": False, "transfers": 0}
+
+        records = sorted(self._records_by_version.pop(weight_version, []))
+        self._done_sources_by_version.pop(weight_version, None)
+        relay_update_refs = [
+            update_ref
+            for _, _, update_refs in records
+            for update_ref in update_refs
+        ]
+        message = (
+            f"{_PROFILE_PREFIX} stage=schedule_background_finalize "
+            f"transfers={len(relay_update_refs)} weight_version={weight_version}"
+        )
+        logger.info(message)
+        print(message, flush=True)
+        self._pending_fanout_ref = _run_relay_fanout_and_resume.remote(
+            rollout_engines=self._rollout_engines,
+            rollout_engine_lock=self._rollout_engine_lock,
+            relay_engine=self._relay_engine,
+            peer_engines=self._peer_engines,
+            relay_gpu_count=self._relay_gpu_count,
+            next_fanout_port=self._next_fanout_port,
+            weight_version=weight_version,
+            relay_update_refs=relay_update_refs,
+        )
+        return {"scheduled": True, "transfers": len(relay_update_refs)}
+
+    def wait_pending_fanout(self) -> dict[str, int]:
+        if self._pending_fanout_ref is None:
+            return {"next_fanout_port": self._next_fanout_port}
+        result = ray.get(self._pending_fanout_ref)
+        self._next_fanout_port = result["next_fanout_port"]
+        self._pending_fanout_ref = None
+        return result
+
+
 def _fanout_relay_weights_to_peer_instances(
     *,
     rollout_engine_lock: ActorHandle,
@@ -124,67 +212,73 @@ def _fanout_relay_weights_to_peer_instances(
     _acquire_rollout_engine_lock(rollout_engine_lock)
     _profile_duration("fanout_acquire_rollout_lock", stage_start, peers=len(peer_engines))
     try:
-        for peer_idx, peer_engine in enumerate(peer_engines, start=1):
-            master_address, first_port = ray.get(
-                relay_engine._get_current_node_ip_and_free_port.remote(
-                    start_port=next_fanout_port,
-                    consecutive=relay_gpu_count,
-                )
+        master_address, first_port = ray.get(
+            relay_engine._get_current_node_ip_and_free_port.remote(
+                start_port=next_fanout_port,
+                consecutive=relay_gpu_count,
             )
-            next_fanout_port = first_port + relay_gpu_count + 1
-            ports = ",".join(str(first_port + rank) for rank in range(relay_gpu_count))
-            group_name = f"miles-sendrecv-broadcast-fanout-v{weight_version}-peer_{peer_idx}"
+        )
+        next_fanout_port = first_port + relay_gpu_count + 1
+        ports = ",".join(str(first_port + rank) for rank in range(relay_gpu_count))
+        group_name = f"miles-sendrecv-broadcast-fanout-v{weight_version}"
+        world_size = len(peer_engines) + 1
 
-            stage_start = time.perf_counter()
-            init_refs = [
-                relay_engine.init_weights_send_group_for_remote_instance.remote(
-                    master_address=master_address,
-                    ports=ports,
-                    group_rank=0,
-                    world_size=2,
-                    group_name=group_name,
-                    backend="nccl",
-                ),
-                peer_engine.init_weights_send_group_for_remote_instance.remote(
-                    master_address=master_address,
-                    ports=ports,
-                    group_rank=1,
-                    world_size=2,
-                    group_name=group_name,
-                    backend="nccl",
-                ),
-            ]
-            _ensure_success(ray.get(init_refs), f"initialize relay fanout group {group_name}")
-            _profile_duration(
-                "fanout_init_group",
-                stage_start,
-                peer_idx=peer_idx,
+        stage_start = time.perf_counter()
+        init_refs = [
+            relay_engine.init_weights_send_group_for_remote_instance.remote(
+                master_address=master_address,
+                ports=ports,
+                group_rank=0,
+                world_size=world_size,
+                group_name=group_name,
+                backend="nccl",
+            )
+        ]
+        init_refs.extend(
+            peer_engine.init_weights_send_group_for_remote_instance.remote(
+                master_address=master_address,
+                ports=ports,
+                group_rank=peer_rank,
+                world_size=world_size,
+                group_name=group_name,
+                backend="nccl",
+            )
+            for peer_rank, peer_engine in enumerate(peer_engines, start=1)
+        )
+        _ensure_success(ray.get(init_refs), f"initialize relay fanout group {group_name}")
+        _profile_duration(
+            "fanout_init_group",
+            stage_start,
+            peers=len(peer_engines),
+            group_name=group_name,
+        )
+
+        stage_start = time.perf_counter()
+        send_refs = [
+            relay_engine.send_recv_weights_to_remote_instance.remote(
+                master_address=master_address,
+                ports=ports,
                 group_name=group_name,
             )
-
-            stage_start = time.perf_counter()
-            send_refs = [
-                relay_engine.send_recv_weights_to_remote_instance.remote(
-                    master_address=master_address,
-                    ports=ports,
-                    group_name=group_name,
-                ),
-                peer_engine.send_recv_weights_to_remote_instance.remote(
-                    master_address=master_address,
-                    ports=ports,
-                    group_name=group_name,
-                ),
-            ]
-            _ensure_success(
-                ray.get(send_refs),
-                f"send/recv relay weights through {group_name}",
-            )
-            _profile_duration(
-                "fanout_send_recv_weights",
-                stage_start,
-                peer_idx=peer_idx,
+        ]
+        send_refs.extend(
+            peer_engine.send_recv_weights_to_remote_instance.remote(
+                master_address=master_address,
+                ports=ports,
                 group_name=group_name,
             )
+            for peer_engine in peer_engines
+        )
+        _ensure_success(
+            ray.get(send_refs),
+            f"send/recv relay weights through {group_name}",
+        )
+        _profile_duration(
+            "fanout_send_recv_weights",
+            stage_start,
+            peers=len(peer_engines),
+            group_name=group_name,
+        )
     finally:
         ray.get(rollout_engine_lock.release.remote())
 
@@ -224,11 +318,9 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._next_fanout_port = 20000
-        self._pending_fanout_ref: ray.ObjectRef | None = None
         self._relay_update_group = None
         self._bucket_id = 0
-        self._pending_relay_update_records: list[tuple[int, int, list[ray.ObjectRef]]] = []
-        self._rollout_engine_lock_held = False
+        self._pending_coordinator_submit_refs: list[ray.ObjectRef] = []
 
     def connect_rollout_engines(
         self,
@@ -248,6 +340,7 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
         self._peer_engines = list(rollout_engines[1:])
         self._relay_gpu_count = engine_gpu_counts[0]
         self._pp_rank = get_parallel_state().pp.rank
+        self._connect_coordinator()
 
         if self._is_source:
             self._group_name = f"miles-sendrecv-broadcast-train-pp_{self._pp_rank}"
@@ -264,6 +357,30 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
                 [self._relay_engine],
                 engine_gpu_counts=[self._relay_gpu_count],
             )
+
+    def _connect_coordinator(self) -> None:
+        coordinator_name = _coordinator_actor_name()
+        if dist.get_rank() == 0:
+            try:
+                self._coordinator = ray.get_actor(coordinator_name)
+            except ValueError:
+                self._coordinator = _SendRecvBroadcastCoordinator.options(
+                    name=coordinator_name
+                ).remote()
+            ray.get(
+                self._coordinator.configure.remote(
+                    expected_sources=get_parallel_state().pp.size,
+                    rollout_engines=self.rollout_engines,
+                    rollout_engine_lock=self.rollout_engine_lock,
+                    relay_engine=self._relay_engine,
+                    peer_engines=self._peer_engines,
+                    relay_gpu_count=self._relay_gpu_count,
+                    next_fanout_port=self._next_fanout_port,
+                )
+            )
+        dist.barrier(group=get_gloo_group())
+        if dist.get_rank() != 0:
+            self._coordinator = ray.get_actor(coordinator_name)
 
     def _validate_relay_fanout_layout(
         self,
@@ -300,21 +417,32 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
             converted_named_tensors
         )
         stage_start = time.perf_counter()
-        update_refs = update_weights_from_distributed(
-            self._group_name,
-            self._relay_update_group,
-            None,
-            [self._relay_engine],
-            converted_named_tensors,
+        self._acquire_rollout_engine_lock()
+        try:
+            update_refs = update_weights_from_distributed(
+                self._group_name,
+                self._relay_update_group,
+                None,
+                [self._relay_engine],
+                converted_named_tensors,
+            )
+            _profile_duration(
+                "relay_nccl_broadcast_bucket",
+                stage_start,
+                bucket_id=bucket_id,
+                tensors=len(names),
+                bytes=total_bytes,
+            )
+        finally:
+            ray.get(self.rollout_engine_lock.release.remote())
+        self._pending_coordinator_submit_refs.append(
+            self._coordinator.add_relay_update_refs.remote(
+                weight_version=self.weight_version,
+                pp_rank=self._pp_rank,
+                bucket_id=bucket_id,
+                update_refs=update_refs,
+            )
         )
-        _profile_duration(
-            "relay_nccl_broadcast_bucket",
-            stage_start,
-            bucket_id=bucket_id,
-            tensors=len(names),
-            bytes=total_bytes,
-        )
-        self._pending_relay_update_records.append((self._pp_rank, bucket_id, update_refs))
         converted_named_tensors.clear()
         _profile_duration(
             "update_bucket_total",
@@ -326,69 +454,29 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
             pbar.update(1)
 
     def _before_update_weight_implementation(self) -> None:
-        if not self._is_source:
-            return
-        stage_start = time.perf_counter()
-        self._acquire_rollout_engine_lock()
-        self._rollout_engine_lock_held = True
-        _profile_duration("trainer_acquire_rollout_lock_all", stage_start)
+        pass
 
     def _after_update_weight_implementation(self) -> None:
-        if not self._is_source or not self._rollout_engine_lock_held:
-            return
-        stage_start = time.perf_counter()
-        ray.get(self.rollout_engine_lock.release.remote())
-        self._rollout_engine_lock_held = False
-        _profile_duration("trainer_release_rollout_lock_all", stage_start)
+        pass
 
     def _finalize_and_resume_engines(self, post_load_weights: bool = False) -> None:
-        relay_update_refs = self._collect_pending_relay_update_refs()
-        if dist.get_rank() == 0:
-            message = (
-                f"{_PROFILE_PREFIX} stage=schedule_background_finalize "
-                f"transfers={len(relay_update_refs)} weight_version={self.weight_version}"
+        if self._is_source:
+            ray.get(self._pending_coordinator_submit_refs)
+            self._pending_coordinator_submit_refs = []
+            ray.get(
+                self._coordinator.mark_source_done.remote(
+                    weight_version=self.weight_version,
+                    pp_rank=self._pp_rank,
+                )
             )
-            logger.info(message)
-            print(message, flush=True)
-            self._pending_fanout_ref = _run_relay_fanout_and_resume.remote(
-                rollout_engines=self.rollout_engines,
-                rollout_engine_lock=self.rollout_engine_lock,
-                relay_engine=self._relay_engine,
-                peer_engines=self._peer_engines,
-                relay_gpu_count=self._relay_gpu_count,
-                next_fanout_port=self._next_fanout_port,
-                weight_version=self.weight_version,
-                relay_update_refs=relay_update_refs,
-            )
-
-    def _collect_pending_relay_update_refs(self) -> list[ray.ObjectRef]:
-        gloo_group = get_gloo_group()
-        all_records = [None] * dist.get_world_size(group=gloo_group)
-        dist.all_gather_object(
-            all_records,
-            self._pending_relay_update_records,
-            group=gloo_group,
-        )
-        self._pending_relay_update_records = []
-        return [
-            update_ref
-            for _, _, update_refs in sorted(
-                record
-                for rank_records in all_records
-                if rank_records is not None
-                for record in rank_records
-            )
-            for update_ref in update_refs
-        ]
 
     def wait_pending_fanout(self) -> None:
         gloo_group = get_gloo_group()
         error_message = None
-        if dist.get_rank() == 0 and self._pending_fanout_ref is not None:
+        if dist.get_rank() == 0 and hasattr(self, "_coordinator"):
             try:
-                result = ray.get(self._pending_fanout_ref)
+                result = ray.get(self._coordinator.wait_pending_fanout.remote())
                 self._next_fanout_port = result["next_fanout_port"]
-                self._pending_fanout_ref = None
             except Exception as exc:
                 error_message = repr(exc)
         errors = [None] * dist.get_world_size(group=gloo_group)

@@ -505,21 +505,6 @@ class SGLangEngine(RayActor):
             },
         )
 
-    def send_weights_to_remote_instance(
-        self,
-        master_address: str,
-        ports: str,
-        group_name: str,
-    ):
-        return self._make_request(
-            "send_weights_to_remote_instance",
-            {
-                "master_address": master_address,
-                "ports": ports,
-                "group_name": group_name,
-            },
-        )
-
     def send_recv_weights_to_remote_instance(
         self,
         master_address: str,

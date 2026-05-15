@@ -139,13 +139,6 @@ class ServerGroup:
                     "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
                 }.items()
             }
-            env_vars.update(
-                {
-                    name: os.environ[name]
-                    for name in ("MOONCAKE_PROTOCOL", "MOONCAKE_DEVICE", "MC_FORCE_TCP")
-                    if name in os.environ
-                }
-            )
             env_vars.update(dumper_utils.get_sglang_env(self.args))
 
             rollout_engine = RolloutRayActor.options(

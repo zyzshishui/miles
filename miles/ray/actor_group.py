@@ -55,11 +55,6 @@ class RayTrainGroup:
             "NCCL_CUMEM_ENABLE": os.environ.get("NCCL_CUMEM_ENABLE", "0"),
             "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
-            **{
-                name: os.environ[name]
-                for name in ("MOONCAKE_PROTOCOL", "MOONCAKE_DEVICE", "MC_FORCE_TCP")
-                if name in os.environ
-            },
             **self.args.train_env_vars,
         }
 
