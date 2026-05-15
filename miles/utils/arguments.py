@@ -2087,14 +2087,11 @@ def miles_validate_args(args):
             f"{args.update_weight_transfer_mode} weight transfer mode is not compatible with --colocate. "
             "Please use broadcast mode or disable colocate."
         )
-    if args.update_weight_transfer_mode == "p2p":
         assert (
             getattr(args, "prefill_num_servers", None) is None
-        ), "P2P weight transfer mode has not been tested when PD is enabled."
+        ), f"{args.update_weight_transfer_mode} weight transfer mode has not been tested when PD is enabled."
+
     if args.update_weight_transfer_mode == "sendrecv_broadcast":
-        assert (
-            getattr(args, "prefill_num_servers", None) is None
-        ), "sendrecv_broadcast weight transfer mode has not been tested when PD is enabled."
         assert (
             getattr(args, "sglang_dp_size", 1) == 1
         ), "sendrecv_broadcast weight transfer mode currently requires --sglang-dp-size 1."

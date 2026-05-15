@@ -168,12 +168,6 @@ class DistBucketedWeightUpdateMixin:
             )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
 
-    def _before_update_weight_implementation(self) -> None:
-        pass
-
-    def _after_update_weight_implementation(self) -> None:
-        pass
-
     @torch.no_grad()
     def update_weights(self) -> None:
         """Orchestrate the full weight-update lifecycle.
@@ -194,7 +188,6 @@ class DistBucketedWeightUpdateMixin:
         dist.barrier(group=get_gloo_group())
 
         with timer("update_weights_implementation"):
-            self._before_update_weight_implementation()
             pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_source else None
 
             with timer("gather_and_update_non_expert_weights"):
@@ -203,7 +196,6 @@ class DistBucketedWeightUpdateMixin:
             with timer("gather_and_update_expert_weights"):
                 self._gather_and_update_expert_weights(self._update_weight_implementation, pbar)
             dist.barrier(group=get_gloo_group())
-            self._after_update_weight_implementation()
 
         with timer("finalize_and_resume_engines"):
             self._finalize_and_resume_engines()

@@ -30,6 +30,13 @@ async def train(args):
         await actor_model.wait_pending_weight_updates()
         await rollout_manager.check_weights.remote(action="compare")
 
+    if args.num_rollout == 0:
+        if args.eval_interval is not None:
+            await rollout_manager.eval.remote(rollout_id=0)
+        await actor_model.wait_pending_weight_updates()
+        await rollout_manager.dispose.remote()
+        return
+
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):

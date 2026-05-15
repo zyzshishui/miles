@@ -13,10 +13,10 @@ from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.distributed_utils import get_gloo_group
 
 from .mixin import DistBucketedWeightUpdateMixin
-from .broadcast import (
+from .broadcast_utils import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
-    update_weights_from_distributed,
+    update_weights_from_distributed_send_recv,
 )
 from ..common import post_process_weights
 
@@ -356,6 +356,7 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
                 self._group_name,
                 [self._relay_engine],
                 engine_gpu_counts=[self._relay_gpu_count],
+                engine_tp_rank_filters=[[0]],
             )
 
     def _connect_coordinator(self) -> None:
@@ -413,13 +414,11 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
         total_start = time.perf_counter()
         bucket_id = self._bucket_id
         self._bucket_id += 1
-        names, dtypes, shapes, total_bytes = self._describe_source_bucket(
-            converted_named_tensors
-        )
+        tensor_count, total_bytes = self._describe_source_bucket(converted_named_tensors)
         stage_start = time.perf_counter()
         self._acquire_rollout_engine_lock()
         try:
-            update_refs = update_weights_from_distributed(
+            update_refs = update_weights_from_distributed_send_recv(
                 self._group_name,
                 self._relay_update_group,
                 None,
@@ -427,10 +426,10 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
                 converted_named_tensors,
             )
             _profile_duration(
-                "relay_nccl_broadcast_bucket",
+                "relay_nccl_send_recv_bucket",
                 stage_start,
                 bucket_id=bucket_id,
-                tensors=len(names),
+                tensors=tensor_count,
                 bytes=total_bytes,
             )
         finally:
@@ -452,12 +451,6 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
 
         if pbar:
             pbar.update(1)
-
-    def _before_update_weight_implementation(self) -> None:
-        pass
-
-    def _after_update_weight_implementation(self) -> None:
-        pass
 
     def _finalize_and_resume_engines(self, post_load_weights: bool = False) -> None:
         if self._is_source:
@@ -487,36 +480,16 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
                 f"{next(error for error in errors if error)}"
             )
 
-    def _fanout_relay_weights_to_peer_instances(self) -> None:
-        self._next_fanout_port = _fanout_relay_weights_to_peer_instances(
-            rollout_engine_lock=self.rollout_engine_lock,
-            relay_engine=self._relay_engine,
-            peer_engines=self._peer_engines,
-            relay_gpu_count=self._relay_gpu_count,
-            next_fanout_port=self._next_fanout_port,
-            weight_version=self.weight_version,
-        )
-
     def _acquire_rollout_engine_lock(self) -> None:
         _acquire_rollout_engine_lock(self.rollout_engine_lock)
 
     @staticmethod
     def _describe_source_bucket(
         converted_named_tensors: Sequence[tuple[str, torch.Tensor]]
-    ) -> tuple[list[str], list[str], list[list[int]], int]:
-        names: list[str] = []
-        dtypes: list[str] = []
-        shapes: list[list[int]] = []
+    ) -> tuple[int, int]:
         total_bytes = 0
 
-        for name, tensor in converted_named_tensors:
-            names.append(name)
-            dtypes.append(str(tensor.dtype).replace("torch.", ""))
-            shapes.append(list(tensor.shape))
+        for _, tensor in converted_named_tensors:
             total_bytes += tensor.numel() * tensor.element_size()
 
-        return names, dtypes, shapes, total_bytes
-
-    @staticmethod
-    def _ensure_success(responses: Sequence[dict | None], action: str) -> None:
-        _ensure_success(responses, action)
+        return len(converted_named_tensors), total_bytes

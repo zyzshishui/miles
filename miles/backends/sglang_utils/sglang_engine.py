@@ -459,7 +459,16 @@ class SGLangEngine(RayActor):
             payload["load_format"] = load_format
         return self._make_request("update_weights_from_disk", payload)
 
-    def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
+    def init_weights_update_group(
+        self,
+        master_address,
+        master_port,
+        rank_offset,
+        world_size,
+        group_name,
+        backend,
+        tp_ranks=None,
+    ):
         return self._make_request(
             "init_weights_update_group",
             {
@@ -469,6 +478,7 @@ class SGLangEngine(RayActor):
                 "world_size": world_size,
                 "group_name": group_name,
                 "backend": backend,
+                "tp_ranks": tp_ranks,
             },
         )
 
@@ -521,7 +531,14 @@ class SGLangEngine(RayActor):
         )
 
     def update_weights_from_distributed(
-        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
+        self,
+        names,
+        dtypes,
+        shapes,
+        group_name,
+        flush_cache=False,
+        weight_version: str | None = None,
+        transfer_mode: str = "broadcast",
     ):
         payload = {
             "names": names,
@@ -529,6 +546,7 @@ class SGLangEngine(RayActor):
             "shapes": shapes,
             "group_name": group_name,
             "flush_cache": flush_cache,
+            "transfer_mode": transfer_mode,
         }
         if weight_version is not None:
             payload["weight_version"] = weight_version

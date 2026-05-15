@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from miles.backends.megatron_utils.update_weight.update_weight_from_distributed import (
+    broadcast_utils,
     mixin,
     sendrecv_broadcast,
 )
@@ -26,6 +27,8 @@ class FakeEngine:
         self.init_weights_send_group_for_remote_instance = FakeRemoteMethod(
             {"success": True, "message": "ok"}
         )
+        self.init_weights_update_group = FakeRemoteMethod({"success": True, "message": "ok"})
+        self.destroy_weights_update_group = FakeRemoteMethod({"success": True, "message": "ok"})
         self.update_weights_from_distributed = FakeRemoteMethod(
             {"success": True, "message": "ok"}
         )
@@ -91,7 +94,14 @@ def test_fanout_initializes_one_ranked_send_group_and_uses_p2p_sendrecv(monkeypa
     updater.weight_version = 7
     updater.rollout_engine_lock = FakeLock()
 
-    updater._fanout_relay_weights_to_peer_instances()
+    updater._next_fanout_port = sendrecv_broadcast._fanout_relay_weights_to_peer_instances(
+        rollout_engine_lock=updater.rollout_engine_lock,
+        relay_engine=updater._relay_engine,
+        peer_engines=updater._peer_engines,
+        relay_gpu_count=updater._relay_gpu_count,
+        next_fanout_port=updater._next_fanout_port,
+        weight_version=updater.weight_version,
+    )
 
     _, relay_init_kwargs = relay.init_weights_send_group_for_remote_instance.calls[0]
     _, peer0_init_kwargs = peer0.init_weights_send_group_for_remote_instance.calls[0]
@@ -117,12 +127,12 @@ def test_fanout_initializes_one_ranked_send_group_and_uses_p2p_sendrecv(monkeypa
     assert len(updater.rollout_engine_lock.release.calls) == 1
 
 
-def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):
+def test_update_bucket_uses_nccl_send_recv_to_send_to_relay(monkeypatch):
     monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
     monkeypatch.setattr(mixin, "get_parallel_state", _source_parallel_state)
     helper_calls = []
 
-    def fake_update_weights_from_distributed(
+    def fake_update_weights_from_distributed_send_recv(
         group_name,
         group,
         weight_version,
@@ -142,8 +152,8 @@ def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):
 
     monkeypatch.setattr(
         sendrecv_broadcast,
-        "update_weights_from_distributed",
-        fake_update_weights_from_distributed,
+        "update_weights_from_distributed_send_recv",
+        fake_update_weights_from_distributed_send_recv,
     )
 
     updater = _new_updater()
@@ -182,17 +192,105 @@ def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):
     assert len(updater.rollout_engine_lock.release.calls) == 1
 
 
+def test_connect_rollout_engines_can_limit_update_group_to_relay_tp0(monkeypatch):
+    created_groups = []
+
+    monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
+    monkeypatch.setattr(
+        broadcast_utils.ray._private.services,
+        "get_node_ip_address",
+        lambda: "127.0.0.1",
+    )
+    monkeypatch.setattr(
+        broadcast_utils,
+        "init_process_group",
+        lambda **kwargs: created_groups.append(kwargs) or "trainer-update-group",
+    )
+
+    engine = FakeEngine()
+    group = broadcast_utils.connect_rollout_engines_from_distributed(
+        SimpleNamespace(rollout_num_gpus_per_engine=2),
+        "group",
+        [engine],
+        engine_gpu_counts=[2],
+        engine_tp_rank_filters=[[0]],
+    )
+
+    assert group == "trainer-update-group"
+    assert len(engine.init_weights_update_group.calls) == 1
+    args, kwargs = engine.init_weights_update_group.calls[0]
+    assert args[2:] == (1, 2, "group")
+    assert kwargs == {"backend": "nccl", "tp_ranks": [0]}
+    assert created_groups[0]["world_size"] == 2
+    assert created_groups[0]["rank"] == 0
+    assert created_groups[0]["group_name"] == "group"
+
+
+def test_update_weights_from_distributed_send_recv_uses_p2p_ops(monkeypatch):
+    created_ops = []
+    waited_works = []
+
+    class FakeWork:
+        def __init__(self, op):
+            self.op = op
+
+        def wait(self):
+            waited_works.append(self.op)
+
+    def fake_p2p_op(op, tensor, *, group, group_peer):
+        created_ops.append((op, tensor, group, group_peer))
+        return created_ops[-1]
+
+    def fake_batch_isend_irecv(ops):
+        return [FakeWork(op) for op in ops]
+
+    monkeypatch.setattr(broadcast_utils.dist, "get_world_size", lambda group: 2)
+    monkeypatch.setattr(broadcast_utils.dist, "P2POp", fake_p2p_op)
+    monkeypatch.setattr(broadcast_utils.dist, "batch_isend_irecv", fake_batch_isend_irecv)
+
+    relay = FakeEngine()
+    tensor0 = torch.ones(2, dtype=torch.float32)
+    tensor1 = torch.ones(3, dtype=torch.float16)
+
+    refs = broadcast_utils.update_weights_from_distributed_send_recv(
+        "group",
+        "process-group",
+        None,
+        [relay],
+        [("weight0", tensor0), ("weight1", tensor1)],
+    )
+
+    assert refs == [{"success": True, "message": "ok"}]
+    assert len(relay.update_weights_from_distributed.calls) == 1
+    _, update_kwargs = relay.update_weights_from_distributed.calls[0]
+    assert update_kwargs["names"] == ["weight0", "weight1"]
+    assert update_kwargs["shapes"] == [tensor0.shape, tensor1.shape]
+    assert update_kwargs["group_name"] == "group"
+    assert update_kwargs["weight_version"] is None
+    assert update_kwargs["transfer_mode"] == "send_recv_tp0"
+    assert [(op, group, peer) for op, _, group, peer in created_ops] == [
+        (broadcast_utils.dist.isend, "process-group", 1),
+        (broadcast_utils.dist.isend, "process-group", 1),
+    ]
+    assert [tensor.data_ptr() for _, tensor, _, _ in created_ops] == [
+        tensor0.data_ptr(),
+        tensor1.data_ptr(),
+    ]
+    assert len(waited_works) == len(created_ops)
+    assert all(waited is created for waited, created in zip(waited_works, created_ops, strict=True))
+
+
 def test_update_bucket_releases_lock_when_nccl_send_fails(monkeypatch):
     monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
     monkeypatch.setattr(mixin, "get_parallel_state", _source_parallel_state)
 
-    def fail_update_weights_from_distributed(*args, **kwargs):
+    def fail_update_weights_from_distributed_send_recv(*args, **kwargs):
         raise RuntimeError("nccl failed")
 
     monkeypatch.setattr(
         sendrecv_broadcast,
-        "update_weights_from_distributed",
-        fail_update_weights_from_distributed,
+        "update_weights_from_distributed_send_recv",
+        fail_update_weights_from_distributed_send_recv,
     )
 
     updater = _new_updater()
@@ -360,6 +458,6 @@ def test_wait_pending_fanout_propagates_rank_zero_failure(monkeypatch):
 
 def test_ensure_success_raises_on_failed_sglang_response():
     with pytest.raises(RuntimeError, match="boom"):
-        UpdateWeightSendRecvBroadcast._ensure_success(
+        sendrecv_broadcast._ensure_success(
             [{"success": False, "message": "boom"}], "fanout"
         )
