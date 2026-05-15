@@ -520,6 +520,21 @@ class SGLangEngine(RayActor):
             },
         )
 
+    def send_recv_weights_to_remote_instance(
+        self,
+        master_address: str,
+        ports: str,
+        group_name: str,
+    ):
+        return self._make_request(
+            "send_recv_weights_to_remote_instance",
+            {
+                "master_address": master_address,
+                "ports": ports,
+                "group_name": group_name,
+            },
+        )
+
     def update_weights_from_distributed(
         self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
     ):

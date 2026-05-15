@@ -30,6 +30,9 @@ class FakeEngine:
             {"success": True, "message": "ok"}
         )
         self.send_weights_to_remote_instance = FakeRemoteMethod({"success": True, "message": "ok"})
+        self.send_recv_weights_to_remote_instance = FakeRemoteMethod(
+            {"success": True, "message": "ok"}
+        )
 
 
 class FakeLock:
@@ -77,7 +80,7 @@ def test_validate_relay_fanout_requires_homogeneous_engine_gpu_counts():
         updater._validate_relay_fanout_layout([object(), object()], [4, 2])
 
 
-def test_fanout_initializes_ranked_send_groups_and_broadcasts(monkeypatch):
+def test_fanout_initializes_ranked_send_groups_and_uses_p2p_sendrecv(monkeypatch):
     monkeypatch.setattr(sendrecv_broadcast.ray, "get", lambda ref: ref)
     updater = _new_updater()
     relay = FakeEngine()
@@ -98,8 +101,10 @@ def test_fanout_initializes_ranked_send_groups_and_broadcasts(monkeypatch):
     assert relay_init_kwargs["world_size"] == peer_init_kwargs["world_size"] == 2
     assert relay_init_kwargs["ports"] == peer_init_kwargs["ports"] == "23456,23457"
     assert relay_init_kwargs["group_name"] == peer_init_kwargs["group_name"]
-    assert len(relay.send_weights_to_remote_instance.calls) == 1
-    assert len(peer.send_weights_to_remote_instance.calls) == 1
+    assert len(relay.send_weights_to_remote_instance.calls) == 0
+    assert len(peer.send_weights_to_remote_instance.calls) == 0
+    assert len(relay.send_recv_weights_to_remote_instance.calls) == 1
+    assert len(peer.send_recv_weights_to_remote_instance.calls) == 1
 
 
 def test_update_bucket_uses_nccl_to_send_to_relay(monkeypatch):

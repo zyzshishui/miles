@@ -164,20 +164,23 @@ def _fanout_relay_weights_to_peer_instances(
 
             stage_start = time.perf_counter()
             send_refs = [
-                relay_engine.send_weights_to_remote_instance.remote(
+                relay_engine.send_recv_weights_to_remote_instance.remote(
                     master_address=master_address,
                     ports=ports,
                     group_name=group_name,
                 ),
-                peer_engine.send_weights_to_remote_instance.remote(
+                peer_engine.send_recv_weights_to_remote_instance.remote(
                     master_address=master_address,
                     ports=ports,
                     group_name=group_name,
                 ),
             ]
-            _ensure_success(ray.get(send_refs), f"send relay weights through {group_name}")
+            _ensure_success(
+                ray.get(send_refs),
+                f"send/recv relay weights through {group_name}",
+            )
             _profile_duration(
-                "fanout_send_weights",
+                "fanout_send_recv_weights",
                 stage_start,
                 peer_idx=peer_idx,
                 group_name=group_name,
