@@ -72,11 +72,6 @@ class UpdateWeightFromDistributed(DistBucketedWeightUpdateMixin):
                 self.args, self._group_name, rollout_engines
             )
 
-    @property
-    def _is_source(self):
-        """If it's the source gpu that broadcasting weights to rollout side"""
-        return get_parallel_state().intra_dp_cp.rank == 0 and get_parallel_state().tp.rank == 0
-
     def _update_weight_implementation(
         self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
@@ -156,7 +151,7 @@ def disconnect_rollout_engines_from_distributed(args, group_name, model_update_g
 def update_weights_from_distributed(
     group_name: str,
     group: dist.ProcessGroup,
-    weight_version: int,
+    weight_version: int | None,
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
 ) -> list[ObjectRef]:
@@ -169,7 +164,7 @@ def update_weights_from_distributed(
             dtypes=[param.dtype for _, param in converted_named_tensors],
             shapes=[param.shape for _, param in converted_named_tensors],
             group_name=group_name,
-            weight_version=str(weight_version),
+            weight_version=str(weight_version) if weight_version is not None else None,
         )
         for engine in rollout_engines
     ]

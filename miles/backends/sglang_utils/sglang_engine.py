@@ -484,6 +484,42 @@ class SGLangEngine(RayActor):
             # catch the case there the engine is just created and does not have the group.
             pass
 
+    def init_weights_send_group_for_remote_instance(
+        self,
+        master_address: str,
+        ports: str,
+        group_rank: int,
+        world_size: int,
+        group_name: str,
+        backend: str = "nccl",
+    ):
+        return self._make_request(
+            "init_weights_send_group_for_remote_instance",
+            {
+                "master_address": master_address,
+                "ports": ports,
+                "group_rank": group_rank,
+                "world_size": world_size,
+                "group_name": group_name,
+                "backend": backend,
+            },
+        )
+
+    def send_weights_to_remote_instance(
+        self,
+        master_address: str,
+        ports: str,
+        group_name: str,
+    ):
+        return self._make_request(
+            "send_weights_to_remote_instance",
+            {
+                "master_address": master_address,
+                "ports": ports,
+                "group_name": group_name,
+            },
+        )
+
     def update_weights_from_distributed(
         self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
     ):

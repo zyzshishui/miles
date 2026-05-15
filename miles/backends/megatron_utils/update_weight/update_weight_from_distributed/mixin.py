@@ -22,7 +22,7 @@ class DistBucketedWeightUpdateMixin:
         self.model: Sequence[torch.nn.Module] (Megatron model chunks).
         self.model_name: str (for HF conversion).
         self.quantization_config: dict | None.
-        self._is_source: bool (whether it's the rank broadcasting weights after `all_gather`).
+        self._is_source: bool (Defaults to the broadcast-style source rank after `all_gather`). Consuming classes can override it when their transfer plan uses a different source mapping.
         self.weight_version: int.
         self.rollout_engines: Sequence[ActorHandle]. engines of rollout side.
         self._group_name: str. Identifier shown in the tqdm progress bar.
@@ -30,6 +30,10 @@ class DistBucketedWeightUpdateMixin:
             Transfer a bucket of HF-format ``(name, tensor)`` pairs to rollout
             engines (via NCCL broadcast, p2p write, etc.).
     """
+
+    @property
+    def _is_source(self):
+        return get_parallel_state().intra_dp_cp.rank == 0 and get_parallel_state().tp.rank == 0
 
     def _gather_and_update_non_expert_weights(
         self,
@@ -164,6 +168,12 @@ class DistBucketedWeightUpdateMixin:
             )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
 
+    def _before_update_weight_implementation(self) -> None:
+        pass
+
+    def _after_update_weight_implementation(self) -> None:
+        pass
+
     @torch.no_grad()
     def update_weights(self) -> None:
         """Orchestrate the full weight-update lifecycle.
@@ -179,16 +189,21 @@ class DistBucketedWeightUpdateMixin:
         """
         self.weight_version += 1
 
-        self._pause_and_prepare_engines()
+        with timer("pause_and_prepare_engines"):
+            self._pause_and_prepare_engines()
         dist.barrier(group=get_gloo_group())
 
         with timer("update_weights_implementation"):
+            self._before_update_weight_implementation()
             pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_source else None
 
-            self._gather_and_update_non_expert_weights(self._update_weight_implementation, pbar)
+            with timer("gather_and_update_non_expert_weights"):
+                self._gather_and_update_non_expert_weights(self._update_weight_implementation, pbar)
             dist.barrier(group=get_gloo_group())
-            self._gather_and_update_expert_weights(self._update_weight_implementation, pbar)
+            with timer("gather_and_update_expert_weights"):
+                self._gather_and_update_expert_weights(self._update_weight_implementation, pbar)
             dist.barrier(group=get_gloo_group())
+            self._after_update_weight_implementation()
 
         with timer("finalize_and_resume_engines"):
             self._finalize_and_resume_engines()

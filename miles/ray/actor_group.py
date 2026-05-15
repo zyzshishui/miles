@@ -55,6 +55,11 @@ class RayTrainGroup:
             "NCCL_CUMEM_ENABLE": os.environ.get("NCCL_CUMEM_ENABLE", "0"),
             "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
+            **{
+                name: os.environ[name]
+                for name in ("MOONCAKE_PROTOCOL", "MOONCAKE_DEVICE", "MC_FORCE_TCP")
+                if name in os.environ
+            },
             **self.args.train_env_vars,
         }
 
@@ -122,6 +127,9 @@ class RayTrainGroup:
     async def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
         await self._broadcast("update_weights")
+
+    async def wait_pending_weight_updates(self):
+        await self._broadcast("wait_pending_weight_updates")
 
     async def onload(self):
         await self._broadcast("wake_up")

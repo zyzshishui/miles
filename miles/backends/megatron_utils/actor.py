@@ -40,6 +40,7 @@ from .replay_utils import get_register_replay_list_func
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed.broadcast import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_distributed.p2p import UpdateWeightP2P
+from .update_weight.update_weight_from_distributed.sendrecv_broadcast import UpdateWeightSendRecvBroadcast
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
@@ -163,8 +164,10 @@ class MegatronTrainRayActor(TrainRayActor):
         else:
             if self.args.update_weight_transfer_mode == "broadcast":
                 update_weight_cls = UpdateWeightFromDistributed
-            else:
+            elif self.args.update_weight_transfer_mode == "p2p":
                 update_weight_cls = UpdateWeightP2P
+            else:
+                update_weight_cls = UpdateWeightSendRecvBroadcast
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
@@ -511,6 +514,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             reload_process_groups()
 
+        self.wait_pending_weight_updates()
+
         if num_new_engines > 0:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
@@ -534,6 +539,9 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.update_weights()
             print_memory("after update_weights")
 
+            if self.args.ci_test:
+                self.wait_pending_weight_updates()
+
             if self.args.ci_test and len(rollout_engines) > 0 and not is_lora_enabled(self.args):
                 engine = random.choice(rollout_engines)
                 engine_version = ray.get(engine.get_weight_version.remote())
@@ -555,6 +563,10 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload_train:
             destroy_process_groups()
+
+    def wait_pending_weight_updates(self) -> None:
+        if hasattr(self, "weight_updater") and hasattr(self.weight_updater, "wait_pending_fanout"):
+            self.weight_updater.wait_pending_fanout()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
