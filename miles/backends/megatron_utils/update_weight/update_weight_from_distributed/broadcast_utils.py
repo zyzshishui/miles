@@ -27,34 +27,8 @@ def connect_rollout_engines_from_distributed(
     """
     if engine_gpu_counts is None:
         engine_gpu_counts = [args.rollout_num_gpus_per_engine] * len(rollout_engines)
-    if len(engine_gpu_counts) != len(rollout_engines):
-        raise ValueError(
-            f"engine_gpu_counts must match rollout_engines, got {len(engine_gpu_counts)} and "
-            f"{len(rollout_engines)}."
-        )
     if engine_tp_rank_filters is not None:
-        if len(engine_tp_rank_filters) != len(rollout_engines):
-            raise ValueError(
-                "engine_tp_rank_filters must match rollout_engines, got "
-                f"{len(engine_tp_rank_filters)} and {len(rollout_engines)}."
-            )
-        effective_engine_gpu_counts = []
-        for engine_index, (tp_ranks, gpu_count) in enumerate(
-            zip(engine_tp_rank_filters, engine_gpu_counts, strict=True)
-        ):
-            if not tp_ranks:
-                raise ValueError(f"engine_tp_rank_filters[{engine_index}] cannot be empty.")
-            if len(set(tp_ranks)) != len(tp_ranks):
-                raise ValueError(
-                    f"engine_tp_rank_filters[{engine_index}] contains duplicate ranks: {tp_ranks}."
-                )
-            invalid_ranks = [rank for rank in tp_ranks if rank < 0 or rank >= gpu_count]
-            if invalid_ranks:
-                raise ValueError(
-                    f"engine_tp_rank_filters[{engine_index}] has ranks outside [0, {gpu_count}): "
-                    f"{invalid_ranks}."
-                )
-            effective_engine_gpu_counts.append(len(tp_ranks))
+        effective_engine_gpu_counts = [len(tp_ranks) for tp_ranks in engine_tp_rank_filters]
     else:
         effective_engine_gpu_counts = list(engine_gpu_counts)
     master_address = ray._private.services.get_node_ip_address()
@@ -133,26 +107,21 @@ def update_weights_from_distributed_send_recv(
     group_name: str,
     group: dist.ProcessGroup,
     weight_version: int | None,
-    rollout_engines: Sequence[ActorHandle],
+    rollout_engine: ActorHandle,
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
-) -> list[ObjectRef]:
+) -> ObjectRef:
     """
-    Send metadata (Ray), send tensors with NCCL send/recv (rank 0 -> engines).
+    Send metadata (Ray) to the relay engine, then send tensors with NCCL
+    send/recv from trainer rank 0 to the relay TP0 (peer=1 in the 2-rank group).
     """
-    names = [name for name, _ in converted_named_tensors]
-    dtypes = [param.dtype for _, param in converted_named_tensors]
-    shapes = [param.shape for _, param in converted_named_tensors]
-    refs = [
-        engine.update_weights_from_distributed.remote(
-            names=names,
-            dtypes=dtypes,
-            shapes=shapes,
-            group_name=group_name,
-            weight_version=str(weight_version) if weight_version is not None else None,
-            transfer_mode="send_recv_tp0",
-        )
-        for engine in rollout_engines
-    ]
+    ref = rollout_engine.update_weights_from_distributed.remote(
+        names=[name for name, _ in converted_named_tensors],
+        dtypes=[param.dtype for _, param in converted_named_tensors],
+        shapes=[param.shape for _, param in converted_named_tensors],
+        group_name=group_name,
+        weight_version=str(weight_version) if weight_version is not None else None,
+        transfer_mode="send_recv_tp0",
+    )
 
     group_world_size = dist.get_world_size(group)
     if group_world_size != 2:
@@ -172,4 +141,4 @@ def update_weights_from_distributed_send_recv(
     for work in dist.batch_isend_irecv(ops):
         work.wait()
 
-    return refs
+    return ref

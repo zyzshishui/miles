@@ -418,11 +418,11 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
         stage_start = time.perf_counter()
         self._acquire_rollout_engine_lock()
         try:
-            update_refs = update_weights_from_distributed_send_recv(
+            update_ref = update_weights_from_distributed_send_recv(
                 self._group_name,
                 self._relay_update_group,
                 None,
-                [self._relay_engine],
+                self._relay_engine,
                 converted_named_tensors,
             )
             _profile_duration(
@@ -439,7 +439,7 @@ class UpdateWeightSendRecvBroadcast(DistBucketedWeightUpdateMixin):
                 weight_version=self.weight_version,
                 pp_rank=self._pp_rank,
                 bucket_id=bucket_id,
-                update_refs=update_refs,
+                update_refs=[update_ref],
             )
         )
         converted_named_tensors.clear()

@@ -136,7 +136,7 @@ def test_update_bucket_uses_nccl_send_recv_to_send_to_relay(monkeypatch):
         group_name,
         group,
         weight_version,
-        rollout_engines,
+        rollout_engine,
         converted_named_tensors,
     ):
         helper_calls.append(
@@ -144,11 +144,11 @@ def test_update_bucket_uses_nccl_send_recv_to_send_to_relay(monkeypatch):
                 group_name,
                 group,
                 weight_version,
-                rollout_engines,
+                rollout_engine,
                 list(converted_named_tensors),
             )
         )
-        return ["relay-update-ref"]
+        return "relay-update-ref"
 
     monkeypatch.setattr(
         sendrecv_broadcast,
@@ -172,11 +172,11 @@ def test_update_bucket_uses_nccl_send_recv_to_send_to_relay(monkeypatch):
 
     assert tensors == []
     assert len(helper_calls) == 1
-    group_name, group, weight_version, rollout_engines, sent_tensors = helper_calls[0]
+    group_name, group, weight_version, rollout_engine, sent_tensors = helper_calls[0]
     assert group_name == "miles-sendrecv-broadcast-train-pp_0"
     assert group == "relay-nccl-group"
     assert weight_version is None
-    assert rollout_engines == [relay]
+    assert rollout_engine is relay
     assert len(sent_tensors) == 1
     assert sent_tensors[0][0] == "model.layers.0.weight"
     assert sent_tensors[0][1] is tensor

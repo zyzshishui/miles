@@ -183,18 +183,15 @@ class DistBucketedWeightUpdateMixin:
         """
         self.weight_version += 1
 
-        with timer("pause_and_prepare_engines"):
-            self._pause_and_prepare_engines()
+        self._pause_and_prepare_engines()
         dist.barrier(group=get_gloo_group())
 
         with timer("update_weights_implementation"):
             pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_source else None
 
-            with timer("gather_and_update_non_expert_weights"):
-                self._gather_and_update_non_expert_weights(self._update_weight_implementation, pbar)
+            self._gather_and_update_non_expert_weights(self._update_weight_implementation, pbar)
             dist.barrier(group=get_gloo_group())
-            with timer("gather_and_update_expert_weights"):
-                self._gather_and_update_expert_weights(self._update_weight_implementation, pbar)
+            self._gather_and_update_expert_weights(self._update_weight_implementation, pbar)
             dist.barrier(group=get_gloo_group())
 
         with timer("finalize_and_resume_engines"):
