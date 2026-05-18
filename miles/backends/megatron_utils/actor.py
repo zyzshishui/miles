@@ -502,6 +502,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
+        self.wait_pending_weight_updates()
+
         if self.args.use_fault_tolerance:
             if dist.get_rank() == 0:
                 ray.get(self.rollout_manager.recover_updatable_engines.remote())
@@ -513,8 +515,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload_train:
             reload_process_groups()
-
-        self.wait_pending_weight_updates()
 
         if num_new_engines > 0:
             self.weight_updater.connect_rollout_engines(
@@ -537,6 +537,14 @@ class MegatronTrainRayActor(TrainRayActor):
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
             self.weight_updater.update_weights()
+            if dist.get_rank() == 0 and hasattr(self.weight_updater, "get_pending_update_coordinator"):
+                pending_coordinator = self.weight_updater.get_pending_update_coordinator()
+                if pending_coordinator is not None:
+                    ray.get(
+                        self.rollout_manager.set_pending_weight_update_coordinator.remote(
+                            pending_coordinator
+                        )
+                    )
             print_memory("after update_weights")
 
             if self.args.ci_test:

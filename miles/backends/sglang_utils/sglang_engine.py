@@ -467,7 +467,7 @@ class SGLangEngine(RayActor):
         world_size,
         group_name,
         backend,
-        tp_ranks=None,
+        transfer_mode="broadcast",
     ):
         return self._make_request(
             "init_weights_update_group",
@@ -478,7 +478,7 @@ class SGLangEngine(RayActor):
                 "world_size": world_size,
                 "group_name": group_name,
                 "backend": backend,
-                "tp_ranks": tp_ranks,
+                "transfer_mode": transfer_mode,
             },
         )
 

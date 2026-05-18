@@ -63,8 +63,6 @@ class UpdateWeightFromDistributed(DistBucketedWeightUpdateMixin):
         pp_rank = get_parallel_state().pp.rank
         if self._is_source:
             self._group_name = f"miles-pp_{pp_rank}"
-
-        if self._is_source:
             if self._model_update_groups is not None:
                 disconnect_rollout_engines_from_distributed(
                     self.args, self._group_name, self._model_update_groups, self.rollout_engines
