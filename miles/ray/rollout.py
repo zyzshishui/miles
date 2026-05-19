@@ -373,7 +373,7 @@ class RolloutManager:
             _start_session_server(args)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
-        self._pending_weight_update_coordinator = None
+        self._weight_sync_coordinator = None
 
         self._metric_checker = MetricChecker.maybe_create(args)
         self._health_monitors = []
@@ -548,14 +548,14 @@ class RolloutManager:
         self._wait_pending_weight_update()
         return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
 
-    def set_pending_weight_update_coordinator(self, coordinator):
-        self._pending_weight_update_coordinator = coordinator
+    def set_weight_sync_coordinator(self, coordinator):
+        self._weight_sync_coordinator = coordinator
 
     def _wait_pending_weight_update(self):
-        if self._pending_weight_update_coordinator is None:
+        if self._weight_sync_coordinator is None:
             return None
-        result = ray.get(self._pending_weight_update_coordinator.wait_pending_fanout.remote())
-        self._pending_weight_update_coordinator = None
+        result = ray.get(self._weight_sync_coordinator.wait_pending_fanout.remote())
+        self._weight_sync_coordinator = None
         return result
 
     def _get_rollout_data(self, rollout_id):

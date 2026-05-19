@@ -144,7 +144,8 @@ class MegatronTrainRayActor(TrainRayActor):
             single_tag=None if args.enable_weights_backuper else "actor",
         )
         self._active_model_tag: str | None = "actor"
-        self.weights_backuper.backup("actor")
+        if self._enable_weight_backup:
+            self.weights_backuper.backup("actor")
 
         if with_ref:
             self.load_other_checkpoint("ref", args.ref_load)
@@ -224,7 +225,14 @@ class MegatronTrainRayActor(TrainRayActor):
         reload_process_groups()
         print_memory("after wake_up model")
 
+    @property
+    def _enable_weight_backup(self) -> bool:
+        """CPU backup is only needed when model tags can switch or colocate reads weights from CPU."""
+        return self.with_ref or self.args.keep_old_actor or self.args.colocate
+
     def _switch_model(self, target_tag: str) -> None:
+        if not self._enable_weight_backup:
+            return
         if target_tag not in self.weights_backuper.backup_tags:
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
         self.weights_backuper.restore(target_tag)
@@ -455,7 +463,10 @@ class MegatronTrainRayActor(TrainRayActor):
                 m.clear_all()
 
         # update the cpu actor weight to the latest model
-        self.weights_backuper.backup("actor")
+        if self._enable_weight_backup:
+            self.weights_backuper.backup("actor")
+        else:
+            torch.cuda.synchronize()
 
         # Update ref model if needed
         if (
@@ -537,10 +548,10 @@ class MegatronTrainRayActor(TrainRayActor):
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
             self.weight_updater.update_weights()
-            if dist.get_rank() == 0 and hasattr(self.weight_updater, "get_pending_update_coordinator"):
-                pending_coordinator = self.weight_updater.get_pending_update_coordinator()
-                if pending_coordinator is not None:
-                    ray.get(self.rollout_manager.set_pending_weight_update_coordinator.remote(pending_coordinator))
+            if dist.get_rank() == 0 and hasattr(self.weight_updater, "get_coordinator"):
+                weight_sync_coordinator = self.weight_updater.get_coordinator()
+                if weight_sync_coordinator is not None:
+                    ray.get(self.rollout_manager.set_weight_sync_coordinator.remote(weight_sync_coordinator))
             print_memory("after update_weights")
 
             if self.args.ci_test:

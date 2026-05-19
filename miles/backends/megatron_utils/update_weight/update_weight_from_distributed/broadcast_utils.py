@@ -13,14 +13,14 @@ from ray.actor import ActorHandle
 from miles.utils.distributed_utils import init_process_group
 
 
-_DEFAULT_NCCL_P2P_OPS_PER_BATCH = 64
+_DEFAULT_WEIGHT_SYNC_P2P_OPS_PER_BATCH = 64
 
 
 def _run_batched_p2p_ops(ops):
     ops_per_batch = int(
         os.environ.get(
-            "MILES_WEIGHT_SYNC_P2P_OPS_PER_BATCH",
-            _DEFAULT_NCCL_P2P_OPS_PER_BATCH,
+            "WEIGHT_SYNC_P2P_OPS_PER_BATCH",
+            _DEFAULT_WEIGHT_SYNC_P2P_OPS_PER_BATCH,
         )
     )
 
@@ -196,15 +196,19 @@ def update_weights_from_distributed_send_recv(
         transfer_mode="relay",
     )
 
+    send_tensors = [
+        (name, param if param.is_contiguous() else param.contiguous())
+        for name, param in converted_named_tensors
+    ]
     _run_batched_p2p_ops(
         [
             dist.P2POp(
                 dist.isend,
-                param.data,
+                param,
                 group=group,
                 group_peer=1,
             )
-            for _, param in converted_named_tensors
+            for _, param in send_tensors
         ]
     )
 
